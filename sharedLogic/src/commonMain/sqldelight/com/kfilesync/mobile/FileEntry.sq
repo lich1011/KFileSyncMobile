@@ -1,0 +1,37 @@
+-- FileEntry.sq (design doc §10.1)
+-- Per-share file index; supports incremental sync and tombstones.
+
+CREATE TABLE file_entries (
+    share_id        TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    entry_type      TEXT NOT NULL DEFAULT 'file',
+    size            INTEGER NOT NULL DEFAULT 0,
+    modified_at     INTEGER,
+    modified_by     TEXT,
+    version_vector  TEXT NOT NULL DEFAULT '{}',
+    sha256          TEXT,
+    blocks          TEXT,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    deleted_at      INTEGER,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (share_id, path)
+);
+
+CREATE INDEX idx_file_entries_share ON file_entries(share_id);
+CREATE INDEX idx_file_entries_deleted ON file_entries(share_id, deleted) WHERE deleted = 1;
+
+getIndex:
+SELECT * FROM file_entries WHERE share_id = ? AND deleted = 0;
+
+getIncremental:
+SELECT * FROM file_entries WHERE share_id = ? AND updated_at > ?;
+
+upsertEntry:
+INSERT OR REPLACE INTO file_entries(share_id, path, entry_type, size, modified_at, modified_by, version_vector, sha256, blocks, deleted, deleted_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+findByHash:
+SELECT share_id, path, blocks FROM file_entries WHERE sha256 = ? AND deleted = 0;
+
+cleanupTombstones:
+DELETE FROM file_entries WHERE deleted = 1 AND deleted_at < ?;

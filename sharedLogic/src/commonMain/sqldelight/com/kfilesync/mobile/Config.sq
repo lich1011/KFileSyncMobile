@@ -1,0 +1,16 @@
+-- Config.sq (design doc §10.1)
+-- Key/value bag for app-level configuration (e.g. local device id, alias).
+
+CREATE TABLE config (
+    key   TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+get:
+SELECT value FROM config WHERE key = ?;
+
+set:
+INSERT OR REPLACE INTO config(key, value) VALUES (?, ?);
+
+delete:
+DELETE FROM config WHERE key = ?;

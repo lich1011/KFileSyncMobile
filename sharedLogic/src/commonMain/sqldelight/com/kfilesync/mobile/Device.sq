@@ -1,0 +1,37 @@
+-- Device.sq (design doc §10.1)
+-- Stores known devices: their TLS identity, alias, and trust state.
+
+CREATE TABLE devices (
+    device_id       TEXT NOT NULL PRIMARY KEY,
+    alias           TEXT NOT NULL,
+    platform        TEXT NOT NULL,
+    device_type     TEXT NOT NULL DEFAULT 'desktop',
+    certificate_pem TEXT NOT NULL,
+    trust_status    TEXT NOT NULL DEFAULT 'discovered',
+    addresses       TEXT,
+    paired_at       INTEGER,
+    last_seen_at    INTEGER,
+    created_at      INTEGER NOT NULL
+);
+
+findById:
+SELECT * FROM devices WHERE device_id = ?;
+
+findPaired:
+SELECT * FROM devices WHERE trust_status = 'paired';
+
+findAll:
+SELECT * FROM devices WHERE trust_status != 'revoked';
+
+insert:
+INSERT OR REPLACE INTO devices(device_id, alias, platform, device_type, certificate_pem, trust_status, addresses, paired_at, last_seen_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateTrustStatus:
+UPDATE devices SET trust_status = ?, paired_at = ? WHERE device_id = ?;
+
+updateLastSeen:
+UPDATE devices SET last_seen_at = ?, addresses = ? WHERE device_id = ?;
+
+delete:
+DELETE FROM devices WHERE device_id = ?;

@@ -1,0 +1,47 @@
+-- Share.sq (design doc §10.1)
+-- Shared-folder definitions + member authorizations.
+
+CREATE TABLE shares (
+    share_id   TEXT NOT NULL PRIMARY KEY,
+    share_name TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    sync_mode  TEXT NOT NULL DEFAULT 'two_way',
+    status     TEXT NOT NULL DEFAULT 'active',
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE share_members (
+    share_id      TEXT NOT NULL,
+    device_id     TEXT NOT NULL,
+    permission    TEXT NOT NULL DEFAULT 'read_write',
+    authorized_by TEXT NOT NULL,
+    authorized_at INTEGER NOT NULL,
+    PRIMARY KEY (share_id, device_id),
+    FOREIGN KEY (share_id) REFERENCES shares(share_id)
+);
+
+findById:
+SELECT * FROM shares WHERE share_id = ?;
+
+findByMember:
+SELECT s.* FROM shares s
+INNER JOIN share_members sm ON s.share_id = sm.share_id
+WHERE sm.device_id = ?;
+
+findAllActive:
+SELECT * FROM shares WHERE status = 'active';
+
+insertShare:
+INSERT OR REPLACE INTO shares(share_id, share_name, local_path, sync_mode, status, created_by, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertMember:
+INSERT OR REPLACE INTO share_members(share_id, device_id, permission, authorized_by, authorized_at)
+VALUES (?, ?, ?, ?, ?);
+
+removeMember:
+DELETE FROM share_members WHERE share_id = ? AND device_id = ?;
+
+getMembersForShare:
+SELECT * FROM share_members WHERE share_id = ?;
