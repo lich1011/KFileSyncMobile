@@ -19,6 +19,7 @@ material3 = "1.11.0-alpha07"
 # AndroidX
 androidx-activity = "1.13.0"
 androidx-core = "1.18.0"
+andoridx-documentfile = "1.0.1"
 androidx-lifecycle = "2.11.0-beta01"
 androidx-work = "2.10.0"
 
@@ -50,6 +51,9 @@ voyager = "1.1.0-beta03"
 # Test
 junit = "4.13.2"
 
+# BouncyCastle - used on Andorid to mint a self-signed X.509 from the
+# AndroidKeyStore - resident EC Key pair . iOS uises Security.framework directly via cinterop,
+# so this is andoridMain-only
 bouncycastle = "1.78.1"
 
 [libraries]
@@ -61,6 +65,7 @@ junit = { module = "junit:junit", version.ref = "junit" }
 # ---- AndroidX ----
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "andoridx-documentfile" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "androidx-work" }
 
 # ---- Compose Multiplatform ----

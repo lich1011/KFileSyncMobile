@@ -3,7 +3,7 @@ package com.kfilesync.mobile.platform.tls
 import com.kfilesync.mobile.domain.port.DeviceRepository
 import com.kfilesync.mobile.infrastructure.crypto.toHexLower
 import io.github.aakira.napier.Napier
-import kotlinx.coroutines.coroutines.runBlocking
+import kotlinx.coroutines.runBlocking
 import java.net.Socket
 import java.security.MessageDigest
 import java.security.cert.CertificateException

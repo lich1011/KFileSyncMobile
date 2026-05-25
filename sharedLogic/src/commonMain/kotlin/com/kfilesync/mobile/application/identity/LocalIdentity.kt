@@ -8,6 +8,7 @@ import io.github.aakira.napier.Napier
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 /**
  * "Who am I?" - every running process needs a stable [LocalIdentity] so the
@@ -84,7 +85,7 @@ class PlatformBackedLocalIdentityProvider(
             mutex.withLock {
                 cached?.let { return@withLock it }
                 Napier.i("PlatformBackedLocalIdentityProvider: bootstrapping identity")
-                val crypto = identityProvider.loadOrCreateGenerate(defaultAlias)
+                val crypto = identityProvider.loadOrGenerate(defaultAlias)
                 val fresh = LocalIdentity(
                     deviceId = crypto.deviceId,
                     alias = defaultAlias,

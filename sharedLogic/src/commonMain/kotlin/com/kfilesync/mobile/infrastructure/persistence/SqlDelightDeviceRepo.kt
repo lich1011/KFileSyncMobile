@@ -47,6 +47,12 @@ class SqlDelightDeviceRepo(
             .map { it.toDomain() }
     }
 
+    override suspend fun findAll(): List<Device> = withContext(Dispatchers.Default) {
+        db.deviceQueries.findPaired()
+            .executeAsList()
+            .map { it.toDomain() }
+    }
+
     override suspend fun save(device: Device) = withContext(Dispatchers.Default) {
         val now = Clock.System.now().toEpochMilliseconds()
         val (trustStatus, pairedAt) = trustColumns(device.state)
@@ -71,6 +77,25 @@ class SqlDelightDeviceRepo(
             paired_at = pairedAt,
             device_id = id.value
         )
+    }
+
+    override suspend fun updateLastSeen(
+        id: DeviceId,
+        lastSeenAt: Instant,
+        addresses: List<DeviceAddress>?
+    ) = withContext(Dispatchers.Default) {
+        // The schema lets us update last_seen_at and addresses together; we
+        // pass either the new list (re-encoded) or null to leave the column
+        // untouched. SQLDelight will pass null straight through to SQLite.
+        db.deviceQueries.updateLastSeen(
+            last_seen_at = lastSeenAt.toEpochMilliseconds(),
+            addresses = addresses?.let { addressesToJsonOrNull(it) },
+            device_id = id.value
+        )
+    }
+
+    override suspend fun delete(id: DeviceId) = withContext(Dispatchers.Default) {
+        db.deviceQueries.delete(device_id = id.value)
     }
 
     // ------------------ row -> domain mapping ------------------
@@ -133,7 +158,7 @@ private data class DeviceAddressDto(val host: String, val port: Int)
 
 private fun platformToWire(p: DevicePlatform): String = when (p) {
     DevicePlatform.Windows -> "windows"
-    DevicePlatform.MacOs -> "macos"
+    DevicePlatform.MacOS -> "macos"
     DevicePlatform.Linux -> "linux"
     DevicePlatform.Android -> "android"
     DevicePlatform.IOS -> "ios"
@@ -141,7 +166,7 @@ private fun platformToWire(p: DevicePlatform): String = when (p) {
 
 private fun platformFromWire(value: String): DevicePlatform = when (value) {
     "windows" -> DevicePlatform.Windows
-    "macos" -> DevicePlatform.MacOs
+    "macos" -> DevicePlatform.MacOS
     "linux" -> DevicePlatform.Linux
     "android" -> DevicePlatform.Android
     "ios" -> DevicePlatform.IOS

@@ -1,6 +1,5 @@
 package com.kfilesync.mobile.infrastructure.network
 
-import io.ktor.network.tls.certificates.buildKeyStore
 import io.ktor.server.application.Application
 import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
@@ -46,5 +45,4 @@ internal actual fun startKtorEngine(
                 this.port = port
             }
         }
-        this.module = module
-    })
+    }, module = module)

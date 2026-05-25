@@ -31,7 +31,6 @@ kotlin {
     }
 
     listOf(
-        iosX64(),
         iosArm64(),
         iosSimulatorArm64()
     ).forEach { iosTarget ->
@@ -93,10 +92,13 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.koin.android)
             implementation(libs.androidx.work.runtime)
+            implementation(libs.bouncycastle.bcpkix)
+            implementation(libs.androidx.documentfile)
         }
         iosMain.dependencies {
             implementation(libs.sqldelight.nativeDriver)
             implementation(libs.ktor.client.darwin)
+            implementation(libs.kotlinx.atomicfu)
         }
     }
 }
