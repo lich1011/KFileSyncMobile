@@ -1,9 +1,11 @@
 package com.kfilesync.mobile.application.handler
 
+import com.kfilesync.mobile.application.service.TransferAppService
 import com.kfilesync.mobile.domain.event.TrustRevoked
 import com.kfilesync.mobile.domain.port.DeviceRepository
 import com.kfilesync.mobile.domain.port.EventBus
 import com.kfilesync.mobile.domain.port.KeyStore
+import com.kfilesync.mobile.domain.port.TrustBootstrapState
 import io.github.aakira.napier.Napier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +26,8 @@ import kotlinx.coroutines.launch
 class SecurityHandler(
     private val deviceRepository: DeviceRepository,
     private val keyStore: KeyStore,
+    private val trustBootstrapState: TrustBootstrapState,
+    private val transferService: TransferAppService,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) {
 
@@ -31,6 +35,8 @@ class SecurityHandler(
         eventBus.subscribe(TrustRevoked::class) { evt ->
             scope.launch { onTrustRevoked(evt) }
         }
+        // Note: PairingCompleted → markPaired() is handled by PinnedTrustSnapshot.bind()
+        // to avoid duplicating the responsibility across two handlers.
         Napier.i("SecurityHandler subscribed to TrustRevoked")
     }
 
@@ -41,10 +47,10 @@ class SecurityHandler(
         runCatching { keyStore.deletePrivateKey(event.deviceId) }
             .onFailure { Napier.w("deletePrivateKey(${event.deviceId.value}) failed: ${it.message}") }
 
-        // Phase 2 (T2.7) will additionally:
-        // - cancel active TransferJobs whose peer == event.deviceId
-        // - drop the peer from every share's member list
-        // - close any open HTTP connections to the peer's addresses
-        Napier.i("SecurityHandler scrubbed key material for ${event.deviceId.value}")
+        // Phase 2 (T2.7): cancel active transfers whose peer == event.deviceId.
+        runCatching { transferService.cancelTransfersForPeer(event.deviceId) }
+            .onFailure { Napier.w("cancelTransfersForPeer(${event.deviceId.value}) failed: ${it.message}") }
+
+        Napier.i("SecurityHandler scrubbed key material and transfers for ${event.deviceId.value}")
     }
 }

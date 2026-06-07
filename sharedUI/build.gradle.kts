@@ -28,7 +28,7 @@ kotlin {
         }
     }
 
-    androidLibrary {
+    android {
         namespace = "com.kfilesync.mobile.sharedUI"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
@@ -69,6 +69,8 @@ kotlin {
              implementation(libs.voyager.navigator)
              implementation(libs.voyager.tabNavigator)
              implementation(libs.voyager.koin)
+
+            implementation(libs.napier)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

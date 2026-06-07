@@ -25,11 +25,6 @@ import platform.CoreCrypto.CC_SHA256_DIGEST_LENGTH
  */
 @OptIn(ExperimentalForeignApi::class)
 actual object HashProvider {
-
-    actual fun blake3(data: ByteArray): ByteArray {
-        TODO("Phase 2 T2.3 - wire blake3 cinterop C library")
-    }
-
     actual fun sha256(data: ByteArray): ByteArray {
         val digest = ByteArray(CC_SHA256_DIGEST_LENGTH)
         data.usePinned { input ->

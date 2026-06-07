@@ -30,10 +30,12 @@ import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create_secure_tcp
 import platform.Network.nw_parameters_set_local_endpoint
 import platform.Network.nw_parameters_t
-import platform.Network.sec_identity_create
-import platform.Network.sec_protocol_options_set_local_identity
-import platform.Network.sec_protocol_options_set_min_tls_protocol_version
-import platform.Network.tls_protocol_version_t.tls_protocol_version_TLSv13
+import platform.Security.sec_identity_create
+import platform.Security.sec_protocol_options_set_local_identity
+import platform.Security.sec_protocol_options_set_min_tls_protocol_version
+import platform.Security.tls_protocol_version_TLSv13
+import platform.CoreFoundation.CFRelease
+import platform.CoreFoundation.CFRetain
 import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
 import platform.darwin.dispatch_data_t
 import platform.darwin.dispatch_get_global_queue
@@ -83,7 +85,8 @@ class IosTlsListener(
     private val loopbackPort: Int = LOOPBACK_PORT
 ) {
     private val started = atomic(false)
-    private var listener: nw_listener_t = null
+    private var listener: platform.Network.nw_listener_t? = null
+    private var retainedIdentity: platform.Security.SecIdentityRef? = null
 
     fun start() {
         if (!started.compareAndSet(expect = false, update = true)) {
@@ -125,20 +128,31 @@ class IosTlsListener(
     }
 
     fun stop() {
-        if (started.compareAndSet(expect = true, update = false)) {
-            listener?.let { nw_listener_cancel(it) }
-            listener = null
-            Napier.i("IosTlsListener stopped")
-        }
+        if (!started.compareAndSet(expect = true, update = false)) return
+        listener?.let { nw_listener_cancel(it) }
+        listener = null
+        retainedIdentity?.let { CFRelease(it) }
+        retainedIdentity = null
+        Napier.i("IosTlsListener stopped")
     }
 
     // -------------------- TLS parameter construction --------------------
 
     private fun buildTlsParams(secIdentity: platform.Security.SecIdentityRef): nw_parameters_t {
         // The TLS-options block:
-        // - sets minimum TLS to 1.3 (matches the desktop's policy)
-        // - installs our SecIdentity as the server-side local identity
-        // - leaves the peer-verify block as default (no mTLS in Phase 1)
+        //   - sets minimum TLS to 1.3 (matches the desktop's policy)
+        //   - installs our SecIdentity as the server-side local identity
+        //   - leaves the peer-verify block as default (no mTLS in Phase 1)
+        //
+        // IMPORTANT: nw_parameters_create_secure_tcp's TLS configurator block
+        // is retained by Network.framework and may execute on *every* new
+        // inbound connection. Capturing `secIdentity` directly would let the
+        // ref dangle if CoreFoundation reclaimed it after this function
+        // returns. We CFRetain explicitly here and let the OS hold the
+        // reference for the listener's lifetime; the matching CFRelease lives
+        // in [stop()].
+        CFRetain(secIdentity)
+        retainedIdentity = secIdentity
         val params = nw_parameters_create_secure_tcp(
             { tlsOpts ->
                 val secId = sec_identity_create(secIdentity)
@@ -230,7 +244,7 @@ class IosTlsListener(
             nw_connection_receive(
                 from,
                 minimum_incomplete_length = 1u,
-                maximum_length = (64u * 1024u).convert<size_t>()
+                maximum_length = 65536u
             ) { data: dispatch_data_t?, _, isComplete: Boolean, error ->
                 if (error != null) {
                     teardown()

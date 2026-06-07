@@ -8,7 +8,7 @@ plugins {
 
 kotlin {
     compilerOptions {
-        jvmTarget = JvmTarget.JVM_11
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 dependencies {
@@ -24,6 +24,8 @@ dependencies {
     //Koin Android - boots the platform DI graph
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
+
+    implementation(libs.napier)
 }
 
 android {
@@ -40,6 +42,8 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/io.netty.versions.properties"
         }
     }
     buildTypes {
@@ -48,7 +52,7 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }

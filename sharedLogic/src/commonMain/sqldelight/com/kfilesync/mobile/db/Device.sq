@@ -14,6 +14,8 @@ CREATE TABLE devices (
     created_at      INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_devices_trust_status ON devices(trust_status);
+
 findById:
 SELECT * FROM devices WHERE device_id = ?;
 

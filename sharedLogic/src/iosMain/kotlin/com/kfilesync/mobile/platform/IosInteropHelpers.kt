@@ -5,6 +5,9 @@ import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.get
+import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.addressOf
 import platform.Foundation.NSData
 import platform.Foundation.create
 
@@ -19,7 +22,9 @@ import platform.Foundation.create
 internal fun ByteArray.toNSData(): NSData {
     val arr = this
     if (arr.isEmpty()) return NSData()
-    return NSData.create(bytes = arr.refTo(0), length = arr.size.toULong())
+    return arr.usePinned { pinned ->
+        NSData.create(bytes = pinned.addressOf(0), length = arr.size.toULong())
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)

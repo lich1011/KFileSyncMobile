@@ -1,19 +1,18 @@
 package com.kfilesync.mobile.domain.model
 
-/**
- * Transfer job state machine.
- *
- * Transitions:
- * Pending --start--> InProgress
- * InProgress --pause--> Paused
- * InProgress --fail--> Failed
- * InProgress --complete--> Completed
- * Paused --resume--> InProgress
- */
+import kotlin.time.Instant
+
+/** Transfer job state machine (design doc §6.5.1). */
 sealed class TransferState {
-    object Pending : TransferState()
-    object InProgress : TransferState()
-    object Paused : TransferState()
-    object Failed : TransferState()
-    object Completed : TransferState()
+    data object Pending : TransferState()
+
+    data class Active(val startedAt: Instant, val chunksDone: Int) : TransferState()
+
+    data class Paused(val checkpoint: Checkpoint) : TransferState()
+    data object Verifying : TransferState()
+
+    data class Completed(val completedAt: Instant) : TransferState()
+
+    data class Failed(val errorMessage: String, val retries: Int) : TransferState()
+    data object Cancelled : TransferState()
 }

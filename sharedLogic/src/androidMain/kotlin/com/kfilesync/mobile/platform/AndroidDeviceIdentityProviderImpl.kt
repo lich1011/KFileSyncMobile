@@ -144,18 +144,11 @@ class AndroidDeviceIdentityProviderImpl : DeviceIdentityProvider {
 
         // Sign with the AndroidKeyStore-resident private key. BouncyCastle's
         // ContentSigner will delegate the actual signing to the platform
-        // because PrivateKey.provider == AndroidKeyStore.
+        // because PrivateKey is a handle to the KeyStore entry.
         val signer = JcaContentSignerBuilder("SHA256withECDSA")
-            .setProvider(keyPair.private.provider())
             .build(keyPair.private)
         val holder = builder.build(signer)
         return JcaX509CertificateConverter().getCertificate(holder)
-    }
-
-    private fun PrivateKey.provider(): java.security.Provider? = (this as? java.security.Key)?.let {
-        // AndroidKeyStore-resident keys advertise their provider via a side
-        // channel - easiest path is to ask the key for it via KeyStore.
-        JavaKeyStore.getInstance(AndroidKeyStoreAdapter.KEYSTORE_PROVIDER).provider
     }
 
     private fun certToIdentity(cert: X509Certificate): DeviceCryptoIdentity {

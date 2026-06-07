@@ -1,6 +1,7 @@
 package com.kfilesync.mobile.infrastructure.persistence
 
 import android.content.Context
+import androidx.sqlite.db.SupportSQLiteDatabase
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import com.kfilesync.mobile.db.KFileSyncDatabase
@@ -20,7 +21,14 @@ actual class DriverFactory(
         AndroidSqliteDriver(
             schema = KFileSyncDatabase.Schema,
             context = context,
-            name = DATABASE_NAME
+            name = DATABASE_NAME,
+            callback = object : AndroidSqliteDriver.Callback(KFileSyncDatabase.Schema) {
+                override fun onConfigure(db: SupportSQLiteDatabase) {
+                    super.onConfigure(db)
+                    db.setForeignKeyConstraintsEnabled(true)
+                    db.enableWriteAheadLogging()
+                }
+            }
         )
 
     companion object {

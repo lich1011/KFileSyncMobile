@@ -35,7 +35,7 @@ import kotlin.time.Instant
  * is best-effort, ephemeral state - it doesn't belong in persistent storage.
  * The DB owns the durable 'lastSeenAt' timestamp; this service derives the
  * online flag from it at query time and keeps it in a hot StateFlow so the
- * UI can `collectAsState()` without dipping into SQLite on every tick.
+ * UI can 'collectAsState()' without dipping into SQLite on every tick.
  *
  * Lifecycle: `start()` is idempotent (re-calling does nothing). `stop()`
  * cancels the ticker and clears the presence snapshot.
@@ -48,8 +48,8 @@ class HeartbeatService(
     private val pingInterval: Duration = 30.seconds,
     private val offlineThreshold: Duration = 90.seconds
 ) {
-    private var loopJob: Job? = null
 
+    private var loopJob: Job? = null
     private val _presence = MutableStateFlow<Map<DeviceId, OnlineState>>(emptyMap())
 
     /** Read-only presence stream - collect from the ViewModel layer. */
@@ -81,6 +81,7 @@ class HeartbeatService(
         val now = clock()
         val paired = deviceRepository.findPaired()
         val next = _presence.value.toMutableMap()
+
         for (device in paired) {
             val reached = pingAny(device)
             if (reached) {
@@ -104,7 +105,10 @@ class HeartbeatService(
     private suspend fun pingAny(device: Device): Boolean {
         if (device.addresses.isEmpty()) return false
         for (addr in device.addresses) {
-            val ok = httpClient.fetchInfo("http://${addr.host}:${addr.port}") != null
+            // Issue #34/#35: use HTTPS - desktop/mobile lansync v1 is TLS
+            // on every port, so an http:// probe is guaranteed to fail. The
+            // pinned client handles cert verification via PinnedTrustSnapshot.
+            val ok = httpClient.fetchInfo("https://${addr.host}:${addr.port}") != null
             if (ok) return true
         }
         return false

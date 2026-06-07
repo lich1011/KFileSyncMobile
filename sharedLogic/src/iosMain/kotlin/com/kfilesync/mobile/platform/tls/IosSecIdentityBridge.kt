@@ -81,54 +81,14 @@ internal object IosSecIdentityBridge {
         @Suppress("UNCHECKED_CAST")
         val status = SecItemCopyMatching(query as CFDictionaryRef, out.ptr.reinterpret())
         if (status == 0 && out.value != null) {
-            out.value!!.reinterpret<platform.Security.__SecKey>() as SecKeyRef
+            out.value as SecKeyRef
         } else {
             null
         }
     }
 
     private fun buildCertificate(pem: String): SecCertificateRef? {
-        val der = pemToDer(pem) ?: return null
+        val der = com.kfilesync.mobile.infrastructure.crypto.PemUtils.pemToDer(pem) ?: return null
         return SecCertificateCreateWithData(null, der.toNSData() as platform.CoreFoundation.CFDataRef)
-    }
-
-    private fun pemToDer(pem: String): ByteArray? {
-        val body = pem.lines()
-            .filterNot { it.startsWith("-----BEGIN") || it.startsWith("-----END") }
-            .joinToString("")
-            .trim()
-        return runCatching { decodeBase64(body) }.getOrNull()
-    }
-
-    /** Base64 decoder - Kotlin/Native lacks java.util.Base64. */
-    private fun decodeBase64(s: String): ByteArray {
-        val cleaned = s.filter { c -> c != '\n' && c != '\r' && c != ' ' && c != '\t' }
-        val padded = cleaned.trimEnd('=')
-        val out = ByteArray((padded.length * 5) / 8) // 注：图片内代码为 * 5，标准通常为 * 6，此处完全遵循图片手写还原
-        // 注：图片实际代码中倒数第7行为 bits = (bits shl 6) or v，因此上面公式中为 (padded.length * 6) / 8
-        val actualOut = ByteArray((padded.length * 6) / 8)
-        var bits = 0
-        var bitCount = 0
-        var outIdx = 0
-        for (c in padded) {
-            val v = base64Value(c)
-            if (v < 0) continue
-            bits = (bits shl 6) or v
-            bitCount += 6
-            if (bitCount >= 8) {
-                bitCount -= 8
-                actualOut[outIdx++] = ((bits ushr bitCount) and 0xFF).toByte()
-            }
-        }
-        return if (outIdx == actualOut.size) actualOut else actualOut.copyOf(outIdx)
-    }
-
-    private fun base64Value(c: Char): Int = when (c) {
-        in 'A'..'Z' -> c - 'A'
-        in 'a'..'z' -> c - 'a' + 26
-        in '0'..'9' -> c - '0' + 52
-        '+' -> 62
-        '/' -> 63
-        else -> -1
     }
 }

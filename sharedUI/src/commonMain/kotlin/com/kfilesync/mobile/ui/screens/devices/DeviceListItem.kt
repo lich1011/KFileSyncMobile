@@ -14,10 +14,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.kfilesync.mobile.domain.model.Device
 import com.kfilesync.mobile.domain.model.DeviceState
 import com.kfilesync.mobile.domain.model.TrustStatus
 import com.kfilesync.mobile.domain.port.DiscoveredDevice
+import kfilesyncmobile.sharedui.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 import com.kfilesync.mobile.ui.components.DeviceStatusBadge
 import com.kfilesync.mobile.ui.components.OnlineDot
 
@@ -61,7 +62,7 @@ fun DeviceListItem(
                 )
             }
             if (trust == TrustStatus.Paired) {
-                TextButton(onClick = onRevoke) { Text("Revoke") }
+                TextButton(onClick = onRevoke) { Text(stringResource(Res.string.devices_action_revoke)) }
             }
         }
     }
@@ -95,18 +96,17 @@ fun DiscoveredDeviceItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            TextButton(onClick = onPair) { Text("Pair") }
+            TextButton(onClick = onPair) { Text(stringResource(Res.string.devices_action_pair)) }
         }
     }
 }
 
+@Composable
 internal fun platformGlyph(name: String): String = when (name) {
-    "Android" -> "\uD83E\uDD16" // 🤖
-    "iOS" -> "\uD83D\uDCF1"     // 📱
-    "Windows" -> "\uD83D\uDCBB" // 💻
-    "MacOS" -> "\uD83D\uDCBB"   // 💻
-    "Linux" -> "\uD83D\uDCBB"   // 💻
-    else -> "\u2753"           // ❓
+    "Android" -> stringResource(Res.string.devices_platform_android)
+    "iOS" -> stringResource(Res.string.devices_platform_ios)
+    "Windows", "MacOS", "Linux" -> stringResource(Res.string.devices_platform_computer)
+    else -> stringResource(Res.string.devices_platform_unknown)
 }
 
 private fun DeviceState.toTrustStatus(): TrustStatus = when (this) {

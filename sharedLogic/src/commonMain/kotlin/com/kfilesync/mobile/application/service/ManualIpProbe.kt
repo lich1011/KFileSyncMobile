@@ -24,11 +24,11 @@ typealias InfoFetcher = suspend (baseUrl: String) -> DeviceInfoDto?
  * When mDNS doesn't work (locked-down Wi-Fi, Android missing
  * NEARBY_WIFI_DEVICES permission, iOS user denied the Local Network prompt),
  * the user can type an IP + port into the "Enter IP" dialog and we'll hit
- * `GET /api/lansync/v1/info` on it. Parse the response, return a
+ * 'GET /api/lansync/v1/info' on it. Parse the response, return a
  * [DiscoveredDevice] - same shape as the mDNS path, so the UI doesn't care
  * which mechanism produced it.
  *
- * Pure Logic; no platform dependency. Lives in commonMain so both Android
+ * Pure logic; no platform dependency. Lives in commonMain so both Android
  * and iOS reuse the same probe code.
  *
  * The fetch step is injected as a function so tests don't need a real HTTP
@@ -41,7 +41,7 @@ class ManualIpProbe(
     constructor(httpClient: LanSyncHttpClient) : this(fetchInfo = { url -> httpClient.fetchInfo(url) })
 
     /**
-     * Probe `http://[host]:[port]` and return the peer's [DiscoveredDevice]
+     * Probe `https://[host]:[port]` and return the peer's [DiscoveredDevice]
      * descriptor, or null if the peer isn't reachable / doesn't speak
      * lansync v1.
      *
@@ -50,7 +50,11 @@ class ManualIpProbe(
      */
     suspend fun probe(host: String, port: Int = DEFAULT_PORT): DiscoveredDevice? {
         if (host.isBlank()) return null
-        val baseUrl = "http://$host:$port"
+        // Issue #34/#35: lansync v1 is TLS on every port; the `http://`
+        // scheme used here would never reach a real peer. The pinned client
+        // handles cert verification (or accepts under the bootstrap window
+        // for the very first pairing) via PinnedTrustSnapshot.
+        val baseUrl = "https://$host:$port"
         val info: DeviceInfoDto = fetchInfo(baseUrl) ?: run {
             Napier.d("ManualIpProbe: no /info from $baseUrl")
             return null

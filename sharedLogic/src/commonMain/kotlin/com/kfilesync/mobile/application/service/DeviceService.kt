@@ -23,20 +23,25 @@ import kotlinx.coroutines.flow.asStateFlow
  * Phase 0 PoC button; ongoing discovery happens through the coordinator's
  * StateFlow.
  */
-
 interface DeviceAppService {
 
     suspend fun discoverDevices(): List<DiscoveredDevice>
 
     suspend fun initiatePairing(target: DiscoveredDevice): PairingSessionDescriptor
 
-    suspend fun confirmPairing(sessionId: String, pin: String, peerBaseUrl: String, peerAlias: String): Result<Unit>
+    suspend fun confirmPairing(
+        sessionId: String,
+        peerPin: String,
+        peerBaseUrl: String,
+        peerAlias: String,
+        peerPlatform: com.kfilesync.mobile.domain.model.DevicePlatform
+    ): Result<Unit>
 
     suspend fun cancelPairing(sessionId: String)
 
     suspend fun revokeTrust(deviceId: DeviceId): Result<Unit>
 
-    /** Hot stream of every known device (Discovered ∪ Paired). */
+    /** Hot stream of every known device (Discovered & Paired). */
     fun observeDevices(): Flow<List<Device>>
 
     /** Hot stream of devices currently discovered on the LAN. */
@@ -46,7 +51,7 @@ interface DeviceAppService {
     suspend fun refreshPaired()
 }
 
-/** Light DTD returned by [DeviceAppService.initiatePairing]. */
+/** Light DTO returned by [DeviceAppService.initiatePairing]. */
 data class PairingSessionDescriptor(
     val sessionId: String,
     val pin: String,
@@ -65,7 +70,6 @@ data class PairingSessionDescriptor(
  * `discovered` is delegated to the optional [discoveryCoordinator]; if it's
  * null (Phase 0 wiring during tests) we fall back to a never-emitting flow.
  */
-
 class DeviceServiceImpl(
     private val deviceRepository: DeviceRepository,
     private val pairingService: PairingService,
@@ -79,7 +83,14 @@ class DeviceServiceImpl(
         discoveryCoordinator?.devices?.value ?: emptyList()
 
     override suspend fun initiatePairing(target: DiscoveredDevice): PairingSessionDescriptor {
-        val session = pairingService.initiateOutgoing(target)
+        val pairingTarget = PairingTarget(
+            deviceId = target.deviceId,
+            alias = target.alias,
+            platform = target.platform,
+            fingerprint = target.fingerprint,
+            baseUrl = target.addresses.firstOrNull()?.let { "https://${it.host}:${it.port}" }
+        )
+        val session = pairingService.initiateOutgoing(pairingTarget)
         return PairingSessionDescriptor(
             sessionId = session.sessionId,
             pin = session.pin.digits,
@@ -89,11 +100,18 @@ class DeviceServiceImpl(
 
     override suspend fun confirmPairing(
         sessionId: String,
-        pin: String,
+        peerPin: String,
         peerBaseUrl: String,
-        peerAlias: String
+        peerAlias: String,
+        peerPlatform: com.kfilesync.mobile.domain.model.DevicePlatform
     ): Result<Unit> {
-        val outcome = pairingService.submitOutgoingConfirm(sessionId, pin, peerBaseUrl, peerAlias)
+        val outcome = pairingService.submitOutgoingConfirm(
+            sessionId = sessionId,
+            peerPin = peerPin,
+            peerBaseUrl = peerBaseUrl,
+            peerAlias = peerAlias,
+            peerPlatform = peerPlatform
+        )
         if (outcome.isSuccess) refreshPaired()
         return outcome
     }
@@ -115,7 +133,7 @@ class DeviceServiceImpl(
 
     override suspend fun refreshPaired() {
         val list = deviceRepository.findAll()
-        Napier.d{"refreshPaired() -> ${list.size} devices"}
+        Napier.d("refreshPaired() -> ${list.size} devices")
         paired.value = list
     }
 }

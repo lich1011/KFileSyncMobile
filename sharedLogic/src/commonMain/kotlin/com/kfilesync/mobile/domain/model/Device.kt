@@ -20,7 +20,30 @@ data class DeviceAddress(
 enum class TrustStatus { Discovered, Paired, Revoked }
 
 /** Platform on which a device runs. */
-enum class DevicePlatform { Windows, MacOS, Linux, Android, IOS }
+enum class DevicePlatform {
+    Windows, MacOS, Linux, Android, IOS;
+
+    /** Serialize to the wire-format string used by the LanSync protocol. */
+    fun toWire(): String = when (this) {
+        Windows -> "windows"
+        MacOS -> "macos"
+        Linux -> "linux"
+        Android -> "android"
+        IOS -> "ios"
+    }
+
+    companion object {
+        /** Deserialize from a wire-format string, defaulting to [Android]. */
+        fun fromWire(value: String?): DevicePlatform = when (value?.lowercase()) {
+            "windows" -> Windows
+            "macos" -> MacOS
+            "linux" -> Linux
+            "android" -> Android
+            "ios" -> IOS
+            else -> Android
+        }
+    }
+}
 
 enum class DeviceType { Desktop, Mobile }
 

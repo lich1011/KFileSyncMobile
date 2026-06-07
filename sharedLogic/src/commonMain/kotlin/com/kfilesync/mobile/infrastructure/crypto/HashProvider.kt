@@ -3,25 +3,25 @@ package com.kfilesync.mobile.infrastructure.crypto
 /**
  * Cross-platform hash provider (design doc §6.4).
  *
- * The `expect` declaration lives here; each platform module provides an
- * `actual` implementation:
+ * Phase 0 wired SHA-256 platform-native (MessageDigest / CommonCrypto).
+ * Phase 2 (T2.2 / T2.3) adds BLAKE3 - implemented as pure Kotlin in
+ * commonMain via [Blake3Hasher], so no platform actual is required.
  *
- * - androidMain: AndroidCryptoProvider (java.security.MessageDigest +
- * optional blake3-jni native lib).
- * - iosMain:     IosCryptoProvider (CommonCrypto CC_SHA256 + Blake3 via
- * cinterop'ed C library).
- *
- * Phase 0: SHA-256 is fully wired on both platforms (it's mandatory for the
- * file-level checksum that round-trips with the desktop). BLAKE3 is still a
- * Phase 2 deliverable - the platform `actual`'s throw until that work lands.
+ * `sha256` stays expect/actual because the platform-native implementations
+ * are FIPS-blessed + hardware-accelerated where available.
  */
 expect object HashProvider {
-
-    /** Chunk-level fingerprint. Phase 2 (T2.3) - platform `actual`'s currently throw. */
-    fun blake3(data: ByteArray): ByteArray
-
-    /** File-level checksum. Implemented on both platforms in Phase 0. */
+    /** File-level checksum. Implemented on both platforms via the OS crypto stack. */
     fun sha256(data: ByteArray): ByteArray
+}
+
+/** Chunk-level fingerprint. Common code; produces interop-identical digests. */
+fun HashProvider.blake3(data: ByteArray, length: Int = data.size): ByteArray {
+    val hasher = Blake3Hasher()
+    hasher.update(data, 0, length)
+    val out = ByteArray(32)
+    hasher.finalize(out)
+    return out
 }
 
 /**

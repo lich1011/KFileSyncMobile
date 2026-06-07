@@ -1,12 +1,12 @@
 package com.kfilesync.mobile.infrastructure.network
 
 import io.ktor.server.application.Application
-import io.ktor.server.cio.CIOApplicationEngine
+import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
 
 /**
  * Platform-specific server-engine bootstrap (T1.4).
- * * Android `actual` configures Ktor CIO with [io.ktor.server.engine.sslConnector]
+ * * Android `actual` configures Ktor Netty with [io.ktor.server.engine.sslConnector]
  * - TLS is terminated *here* using the AndroidKeyStore-resident keypair, so
  * the private key never leaves the TEE.
  * * iOS `actual` binds the engine to plaintext loopback (127.0.0.1:port). On
@@ -32,4 +32,4 @@ internal expect fun startKtorEngine(
     port: Int,
     host: String,
     module: Application.() -> Unit
-): EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>
+): EmbeddedServer<ApplicationEngine, out ApplicationEngine.Configuration>

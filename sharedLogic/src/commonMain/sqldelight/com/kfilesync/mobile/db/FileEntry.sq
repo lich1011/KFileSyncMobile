@@ -18,13 +18,23 @@ CREATE TABLE file_entries (
 );
 
 CREATE INDEX idx_file_entries_share ON file_entries(share_id);
-CREATE INDEX idx_file_entries_deleted ON file_entries(share_id, deleted) WHERE deleted = 1;
+CREATE INDEX idx_file_entries_deleted ON file_entries(share_id, deleted);
+CREATE INDEX idx_file_entries_updated ON file_entries(share_id, updated_at);
 
 getIndex:
 SELECT * FROM file_entries WHERE share_id = ? AND deleted = 0;
 
 getIncremental:
 SELECT * FROM file_entries WHERE share_id = ? AND updated_at > ?;
+
+findByPath:
+SELECT * FROM file_entries WHERE share_id = ? AND path = ?;
+
+getTombstones:
+SELECT * FROM file_entries WHERE share_id = ? AND deleted = 1;
+
+getAll:
+SELECT * FROM file_entries WHERE share_id = ?;
 
 upsertEntry:
 INSERT OR REPLACE INTO file_entries(share_id, path, entry_type, size, modified_at, modified_by, version_vector, sha256, blocks, deleted, deleted_at, updated_at)

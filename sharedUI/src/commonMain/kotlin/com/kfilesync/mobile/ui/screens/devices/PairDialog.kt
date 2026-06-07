@@ -2,7 +2,6 @@ package com.kfilesync.mobile.ui.screens.devices
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -23,6 +22,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.kfilesync.mobile.application.service.PairingSessionDescriptor
 import com.kfilesync.mobile.domain.port.DiscoveredDevice
+import kfilesyncmobile.sharedui.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * Pairing PIN-entry dialog (design doc §11.3 mock).
@@ -43,15 +44,15 @@ fun PairDialog(
     var enteredPin by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Pair with ${target.alias}") },
+        title = { Text(stringResource(Res.string.devices_pair_with_device, target.alias)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Verify the fingerprint matches on both devices, then enter the PIN the other device is showing.",
+                    stringResource(Res.string.devices_pin_prompt),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Fingerprint: " + target.fingerprint.hex.take(16) + "…",
+                    text = stringResource(Res.string.devices_fingerprint_prefix, target.fingerprint.hex.take(16)),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -65,12 +66,12 @@ fun PairDialog(
                         style = MaterialTheme.typography.displaySmall
                     )
                 }
-                Text("Your PIN - share this with the other device.", style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(Res.string.devices_pin_desc), style = MaterialTheme.typography.labelSmall)
 
                 OutlinedTextField(
                     value = enteredPin,
                     onValueChange = { v -> enteredPin = v.filter { it.isDigit() }.take(6) },
-                    label = { Text("PIN from the other device") },
+                    label = { Text(stringResource(Res.string.devices_pin_label)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -81,10 +82,10 @@ fun PairDialog(
             TextButton(
                 onClick = { onConfirm(enteredPin) },
                 enabled = enteredPin.length == 6
-            ) { Text("Confirm") }
+            ) { Text(stringResource(Res.string.devices_confirm)) }
         },
         dismissButton = {
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            TextButton(onClick = onCancel) { Text(stringResource(Res.string.devices_cancel)) }
         }
     )
 }
@@ -100,7 +101,7 @@ fun PairingResultDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Text(message) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(Res.string.devices_ok)) } }
     )
 }
 
@@ -114,21 +115,21 @@ fun ManualIpDialog(
     var portText by remember { mutableStateOf("53317") }
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Enter IP address") },
+        title = { Text(stringResource(Res.string.devices_manual_ip_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
-                    label = { Text("Host") },
-                    placeholder = { Text("192.168.1.42") },
+                    label = { Text(stringResource(Res.string.devices_manual_ip_host)) },
+                    placeholder = { Text(stringResource(Res.string.devices_manual_ip_host_placeholder)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { portText = it.filter { it.isDigit() }.take(5) },
-                    label = { Text("Port") },
+                    label = { Text(stringResource(Res.string.devices_manual_ip_port)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -139,10 +140,10 @@ fun ManualIpDialog(
             TextButton(
                 onClick = { onSubmit(host.trim(), portText.toIntOrNull() ?: 53317) },
                 enabled = host.isNotBlank()
-            ) { Text("Probe") }
+            ) { Text(stringResource(Res.string.devices_manual_ip_probe)) }
         },
         dismissButton = {
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            TextButton(onClick = onCancel) { Text(stringResource(Res.string.devices_cancel)) }
         }
     )
 }

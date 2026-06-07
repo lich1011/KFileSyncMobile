@@ -60,6 +60,8 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
 
+            implementation(libs.kotlinx.atomicfu)
+
             // Persistence
             implementation(libs.sqldelight.runtime)
             implementation(libs.sqldelight.coroutinesExtensions)
@@ -90,15 +92,17 @@ kotlin {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.sqldelight.androidDriver)
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.ktor.server.netty)
             implementation(libs.koin.android)
             implementation(libs.androidx.work.runtime)
             implementation(libs.bouncycastle.bcpkix)
             implementation(libs.androidx.documentfile)
+            implementation(libs.androidx.lifecycle.process)
         }
         iosMain.dependencies {
             implementation(libs.sqldelight.nativeDriver)
             implementation(libs.ktor.client.darwin)
-            implementation(libs.kotlinx.atomicfu)
+//            implementation(libs.kotlinx.atomicfu)
         }
     }
 }

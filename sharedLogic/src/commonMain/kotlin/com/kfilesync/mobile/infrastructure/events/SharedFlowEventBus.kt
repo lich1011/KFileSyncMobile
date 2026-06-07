@@ -16,10 +16,10 @@ import kotlin.reflect.KClass
 
 /**
  * Reference implementation of [EventBus] built on `MutableSharedFlow`
- * (design doc §6.5.3)
+ * (design doc §6.5.3).
  *
  * Characteristics:
- * - Hot stream - events emitted before any subscriber is attached are
+ * - Hot stream – events emitted before any subscriber is attached are
  * buffered up to [BUFFER_CAPACITY] then dropped oldest. This matches
  * the desktop behaviour and is fine for fire-and-forget domain events.
  * - [publish] is non-suspending (`tryEmit`); domain code never blocks on
@@ -29,10 +29,10 @@ import kotlin.reflect.KClass
  * - The bus owns an internal supervisor scope so a crashing handler
  * doesn't tear down peer handlers.
  */
-
 class SharedFlowEventBus(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) : EventBus {
+
     private val _events = MutableSharedFlow<DomainEvent>(
         replay = 0,
         extraBufferCapacity = BUFFER_CAPACITY,
@@ -68,7 +68,7 @@ class SharedFlowEventBus(
      * Cold view of the bus for callers that want to compose with the rest of
      * the coroutine ecosystem (ViewModels, flows-of-flows, etc).
      */
-    fun events(): Flow<DomainEvent> = _events.asSharedFlow()
+    override fun events(): Flow<DomainEvent> = _events.asSharedFlow()
 
     companion object {
         /** Buffer size matches the desktop's tokio broadcast channel capacity. */

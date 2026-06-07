@@ -1,91 +1,161 @@
 package com.kfilesync.mobile.ui.navigation
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Column
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kfilesyncmobile.sharedui.generated.resources.Res
+import kfilesyncmobile.sharedui.generated.resources.tab_devices
+import kfilesyncmobile.sharedui.generated.resources.tab_devices_glyph
+import kfilesyncmobile.sharedui.generated.resources.tab_transfers
+import kfilesyncmobile.sharedui.generated.resources.tab_transfers_glyph
+import kfilesyncmobile.sharedui.generated.resources.tab_shares
+import kfilesyncmobile.sharedui.generated.resources.tab_shares_glyph
+import kfilesyncmobile.sharedui.generated.resources.tab_sync
+import kfilesyncmobile.sharedui.generated.resources.tab_sync_glyph
+import kfilesyncmobile.sharedui.generated.resources.tab_settings
+import kfilesyncmobile.sharedui.generated.resources.tab_settings_glyph
+import kfilesyncmobile.sharedui.generated.resources.tab_selected_desc
+import org.jetbrains.compose.resources.stringResource
 import com.kfilesync.mobile.ui.screens.devices.DevicesScreen
+import com.kfilesync.mobile.ui.screens.settings.SettingsScreen
+import com.kfilesync.mobile.ui.screens.shares.SharesScreen
+import com.kfilesync.mobile.ui.screens.sync.SyncScreen
+import com.kfilesync.mobile.ui.screens.transfer.TransfersScreen
 
 /**
- * Four/five-tab bottom-bar navigation shell (design doc §11.1).
+ * Five-tab bottom-bar navigation shell (design doc §11.1).
  *
  * Tabs:
- * - Devices   (Phase 1, fully wired this phase)
- * - Transfers (Phase 2 placeholder)
- * - Shares    (Phase 3 placeholder)
- * - Sync      (Phase 4 placeholder)
- * - Settings  (Phase 1 placeholder; SettingsScreen lands in Phase 5)
+ * - Devices   (Phase 1, fully wired)
+ * - Transfers (Phase 2)
+ * - Shares    (Phase 3)
+ * - Sync      (Phase 4)
+ * - Settings  (Phase 5 - alias + fingerprint + policy + cache)
  *
- * Tab state is a plain `remember { mutableStateOf(TabId) }`. Per-screen state
- * (ViewModels) is held by Koin so we don't pay for save-state-across-tabs
- * machinery in Phase 1. Voyager's TabNavigator can drop in later if we
- * decide we want sub-route stacks per tab.
+ * Phase 6 (T6.1) polish:
+ * - Tab content is wrapped in [AnimatedContent] with a 200ms cross-fade so
+ * switching tabs no longer feels like a slamming refresh. The transition
+ * is deliberately short (Material guidance is 150-250ms for tab change)
+ * and uses tween rather than spring - tabs aren't a physical motion.
+ * - Selection state moves from `remember` to `rememberSaveable` so a
+ * process-recreation (Android dark-mode flip, configuration change)
+ * doesn't bounce the user back to Devices.
+ * - Each NavigationBarItem gets a content description that includes the
+ * selection state, so screen readers announce "Devices, selected".
  *
- * Icons: we use emoji-as-text instead of material.icons.* because the
- * `androidx.compose.material:material-icons-extended` artifact isn't on
- * the Compose Multiplatform classpath out of the box and we don't want to
- * pull a 5 MB icon font for five glyphs.
+ * Tab state is the single source of truth here. Per-screen state is held by
+ * Koin/ViewModels so switching tabs doesn't tear down a syncing process.
+ *
+ * Icons use emoji-as-text because `material-icons-extended` isn't on the
+ * Compose Multiplatform classpath and a 5 MB font for five glyphs isn't
+ * worth it.
  */
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun AppNavigation(
     modifier: Modifier = Modifier
 ) {
-    var selected by remember { mutableStateOf(TabId.Devices) }
+    var selected by rememberSaveable { mutableStateOf(TabId.Devices) }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar {
-                TabId.values().forEach { tab ->
+            NavigationBar(
+                tonalElevation = 2.dp,
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                TabId.entries.forEach { tab ->
+                    val isSelected = selected == tab
+                    val label = tab.label()
+                    val glyph = tab.glyph()
+                    val desc = if (isSelected) stringResource(Res.string.tab_selected_desc, label) else label
                     NavigationBarItem(
-                        selected = selected == tab,
+                        selected = isSelected,
                         onClick = { selected = tab },
-                        icon = { Text(tab.glyph, style = MaterialTheme.typography.titleMedium) },
-                        label = { Text(tab.label) }
+                        icon = {
+                            Text(
+                                glyph,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        },
+                        label = { Text(label) },
+                        alwaysShowLabel = true,
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            indicatorColor = MaterialTheme.colorScheme.secondaryContainer
+                        ),
+                        modifier = Modifier.semantics {
+                            contentDescription = desc
+                        }
                     )
                 }
             }
         }
     ) { inner ->
-        when (selected) {
-            TabId.Devices -> DevicesScreen(contentPadding = inner)
-            TabId.Transfers -> PlaceholderScreen(title = "Transfers", phase = "Phase 2 (T2.5)", inner = inner)
-            TabId.Shares -> PlaceholderScreen(title = "Shares", phase = "Phase 3 (T3.4)", inner = inner)
-            TabId.Sync -> PlaceholderScreen(title = "Sync", phase = "Phase 4 (T4.7)", inner = inner)
-            TabId.Settings -> PlaceholderScreen(title = "Settings", phase = "Phase 5 (T5.3)", inner = inner)
+        AnimatedContent(
+            targetState = selected,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(200)) togetherWith
+                        fadeOut(animationSpec = tween(150)))
+            },
+            label = "tab-transition"
+        ) { tab ->
+            when (tab) {
+                TabId.Devices -> DevicesScreen(contentPadding = inner)
+                TabId.Transfers -> TransfersScreen(contentPadding = inner)
+                TabId.Shares -> SharesScreen(contentPadding = inner)
+                TabId.Sync -> SyncScreen(contentPadding = inner)
+                TabId.Settings -> SettingsScreen(contentPadding = inner)
+            }
         }
     }
 }
 
-enum class TabId(val label: String, val glyph: String) {
-    Devices("Devices", "\uD83D\uDCF1"),    // 📱
-    Transfers("Transfers", "\u2191\u2193"),  // ↑↓
-    Shares("Shares", "\uD83D\uDCC1"),       // 📁
-    Sync("Sync", "\uD83D\uDD04"),           // 🔄
-    Settings("Settings", "\u2699"),         // ⚙
+@Immutable
+enum class TabId {
+    Devices,
+    Transfers,
+    Shares,
+    Sync,
+    Settings,
 }
 
 @Composable
-private fun PlaceholderScreen(title: String, phase: String, inner: PaddingValues) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(inner).padding(24.dp)
-    ) {
-        Text(title, style = MaterialTheme.typography.headlineSmall)
-        Text(
-            text = "Lands in $phase. See mobile-design/14-detailed-tasks.md.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.surfaceVariant
-        )
-    }
+fun TabId.label(): String = when (this) {
+    TabId.Devices -> stringResource(Res.string.tab_devices)
+    TabId.Transfers -> stringResource(Res.string.tab_transfers)
+    TabId.Shares -> stringResource(Res.string.tab_shares)
+    TabId.Sync -> stringResource(Res.string.tab_sync)
+    TabId.Settings -> stringResource(Res.string.tab_settings)
+}
+
+@Composable
+fun TabId.glyph(): String = when (this) {
+    TabId.Devices -> stringResource(Res.string.tab_devices_glyph)
+    TabId.Transfers -> stringResource(Res.string.tab_transfers_glyph)
+    TabId.Shares -> stringResource(Res.string.tab_shares_glyph)
+    TabId.Sync -> stringResource(Res.string.tab_sync_glyph)
+    TabId.Settings -> stringResource(Res.string.tab_settings_glyph)
 }

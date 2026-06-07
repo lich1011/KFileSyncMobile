@@ -1,5 +1,10 @@
 package com.kfilesync.mobile.ui.screens.devices
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -21,20 +25,36 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.kfilesync.mobile.ui.components.EmptyStateHint
+import com.kfilesync.mobile.ui.components.SectionHeader
+import kfilesyncmobile.sharedui.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * Devices tab Composable (design doc §11.2 mock).
  *
  * Sections (top to bottom):
- * - Self header: "I am «alias»"
+ * - Self header: "I am <alias>"
  * - Action row: "Enter IP" button
  * - Paired devices list
  * - Discovered (unpaired) devices list
  * - Optional pairing dialog (PIN entry / result toast / manual IP dialog)
+ *
+ * Phase 6 (T6.1) polish:
+ * - `LazyColumn` no longer nests inside a vertically-scrolling `Column`
+ * because that breaks intrinsic measurement on iOS. The whole screen is
+ * a single LazyColumn now, with the static header / action rows as
+ * `item { }` blocks at the top - same visual, far less recomposition on
+ * scroll because cards are lazily realised.
+ * - Discovered / paired lists fade in via [AnimatedVisibility] so new
+ * mDNS hits don't pop in jarringly.
+ * - Self header gets a semantic content description so screen readers
+ * announce identity context once at the top of the screen.
  */
 @Composable
 fun DevicesScreen(
@@ -44,31 +64,50 @@ fun DevicesScreen(
     val ui by viewModel.uiState.collectAsState()
     var showManualIp by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(contentPadding).padding(16.dp),
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(contentPadding)
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ---- Self header ----
-        SelfHeader(selfAlias = ui.selfAlias)
+        item("header") {
+            Spacer(Modifier.height(8.dp))
+            SelfHeader(selfAlias = ui.selfAlias)
+        }
 
-        // ---- Action row ----
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(onClick = { showManualIp = true }) { Text("Enter IP") }
+        item("actions") {
+            val enterIpDesc = stringResource(Res.string.devices_enter_ip_desc)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { showManualIp = true },
+                    modifier = Modifier.semantics {
+                        contentDescription = enterIpDesc
+                    }
+                ) {
+                    Text(stringResource(Res.string.devices_enter_ip))
+                }
+            }
         }
 
         // ---- Paired list ----
-        SectionTitle("Paired devices (${ui.paired.size})")
+        item("paired-header") {
+            SectionHeader(title = stringResource(Res.string.devices_paired_section), count = ui.paired.size)
+        }
         if (ui.paired.isEmpty()) {
-            EmptyHint("No paired devices yet. Pair from the list below.")
+            item("paired-empty") {
+                EmptyStateHint(stringResource(Res.string.devices_paired_empty))
+            }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(ui.paired, key = { it.device.id.value }) { row ->
+            items(ui.paired, key = { "paired-" + it.device.id.value }) { row ->
+                AnimatedVisibility(
+                    visible = true,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
                     DeviceListItem(
                         row = row,
                         onRevoke = { viewModel.revoke(row.device.id) }
@@ -77,25 +116,31 @@ fun DevicesScreen(
             }
         }
 
-        // ---- Discovered list ----
-        SectionTitle("Discovered (${ui.discovered.size})")
+        // ---- Discovered List ----
+        item("discovered-header") {
+            SectionHeader(title = stringResource(Res.string.devices_discovered_section), count = ui.discovered.size)
+        }
         if (ui.discovered.isEmpty()) {
-            EmptyHint(
-                "No nearby devices found. Make sure both devices are on the same Wi-Fi, " +
-                        "or use \"Enter IP\" above."
-            )
+            item("discovered-empty") {
+                EmptyStateHint(stringResource(Res.string.devices_discovered_empty))
+            }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(ui.discovered, key = { it.deviceId.value }) { peer ->
+            items(ui.discovered, key = { "discovered-" + it.deviceId.value }) { peer ->
+                AnimatedVisibility(
+                    visible = true,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
                     DiscoveredDeviceItem(
                         peer = peer,
                         onPair = { viewModel.beginPairing(peer) }
                     )
                 }
             }
+        }
+
+        item("bottom-spacer") {
+            Spacer(Modifier.height(16.dp))
         }
     }
 
@@ -109,12 +154,12 @@ fun DevicesScreen(
             onCancel = { viewModel.cancelPairing() }
         )
         is PairingUiState.Succeeded -> PairingResultDialog(
-            title = "Paired",
-            message = "${pairing.peer.alias} is now trusted.",
+            title = stringResource(Res.string.devices_pair_success_title),
+            message = stringResource(Res.string.devices_pair_success_msg, pairing.peer.alias),
             onDismiss = { viewModel.dismissPairingResult() }
         )
         is PairingUiState.Failed -> PairingResultDialog(
-            title = "Pairing failed",
+            title = stringResource(Res.string.devices_pair_failed_title),
             message = pairing.message,
             onDismiss = { viewModel.dismissPairingResult() }
         )
@@ -134,34 +179,25 @@ fun DevicesScreen(
 
 @Composable
 private fun SelfHeader(selfAlias: String) {
-    Column {
+    val title = if (selfAlias.isNotBlank()) {
+        stringResource(Res.string.devices_self_identity, selfAlias)
+    } else {
+        stringResource(Res.string.devices_title)
+    }
+    val desc = stringResource(Res.string.devices_identity_desc, title)
+    Column(
+        modifier = Modifier.semantics {
+            contentDescription = desc
+        }
+    ) {
         Text(
-            text = if (selfAlias.isNotBlank()) "I am «$selfAlias»" else "Devices",
+            text = title,
             style = MaterialTheme.typography.headlineSmall
         )
         Text(
-            text = "Trust devices on your LAN to send and sync files.",
+            text = stringResource(Res.string.devices_subtitle),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Spacer(Modifier.height(4.dp))
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-@Composable
-private fun EmptyHint(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
 }

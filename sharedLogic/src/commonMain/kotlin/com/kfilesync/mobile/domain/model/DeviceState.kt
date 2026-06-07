@@ -1,5 +1,6 @@
 package com.kfilesync.mobile.domain.model
 
+import com.kfilesync.mobile.domain.DomainError
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -20,11 +21,11 @@ sealed class DeviceState {
 
     fun confirmPairing(certificatePem: String): Result<DeviceState> = when (this) {
         is Discovered -> Result.success(Paired(certificatePem, Clock.System.now()))
-        else -> Result.failure(IllegalStateException("Only Discovered can be paired (was $this)"))
+        else -> Result.failure(DomainError.InvalidStateTransition("Only Discovered can be paired (was $this)"))
     }
 
     fun revoke(): Result<DeviceState> = when (this) {
         is Paired -> Result.success(Revoked(Clock.System.now()))
-        else -> Result.failure(IllegalStateException("Only Paired can be revoked (was $this)"))
+        else -> Result.failure(DomainError.InvalidStateTransition("Only Paired can be revoked (was $this)"))
     }
 }

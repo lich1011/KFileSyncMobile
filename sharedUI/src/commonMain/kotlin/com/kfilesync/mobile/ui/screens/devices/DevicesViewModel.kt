@@ -22,16 +22,17 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 /**
- * ViewModel for the Devices tab (T1.7).
+ * ViewModel for the Devices tab (T1.2).
  *
  * Aggregates four upstream sources into a single [DevicesUiState]:
- * - [DeviceAppService.observeDevices] – paired + discovered devices we know about (everything except revoked).
- * - [DiscoveryCoordinator.devices] – live mDNS / manual-IP discoveries.
- * - [HeartbeatService.presence] – per-device online/offline flag.
- * - [pairingUi] – currently open pairing dialog state.
+ * - [DeviceAppService.observeDevices] - paired + discovered devices we know
+ * about (everything except revoked).
+ * - [DiscoveryCoordinator.devices] - live mDNS / manual-IP discoveries.
+ * - [HeartbeatService.presence] - per-device online/offline flag.
+ * - [pairingUi]                     - currently open pairing dialog state.
  *
  * The combine() upstream guarantees the UI always sees a *consistent*
- * snapshot – i.e. it never flashes a half-updated state where the device
+ * snapshot - i.e. it never flashes a half-updated state where the device
  * list is current but the presence map is stale.
  */
 class DevicesViewModel(
@@ -93,15 +94,14 @@ class DevicesViewModel(
                 _pairingUi.value = PairingUiState.Failed(message = "No reachable address for ${current.target.alias}")
                 return@launch
             }
-
             val peerBaseUrl = "https://${addr.host}:${addr.port}"
             val outcome = deviceService.confirmPairing(
                 sessionId = current.descriptor.sessionId,
-                pin = pin,
+                peerPin = pin,
                 peerBaseUrl = peerBaseUrl,
-                peerAlias = current.target.alias
+                peerAlias = current.target.alias,
+                peerPlatform = current.target.platform
             )
-
             _pairingUi.value = if (outcome.isSuccess) PairingUiState.Succeeded(current.target)
             else PairingUiState.Failed(outcome.exceptionOrNull()?.message ?: "Wrong PIN")
         }
@@ -145,7 +145,6 @@ class DevicesViewModel(
         // suppress it from the "discoveries" panel to avoid double rows.
         val pairedIds = paired.map { it.id }.toSet()
         val unpaired = discovered.filter { it.deviceId !in pairedIds }
-
         return DevicesUiState(
             paired = paired.map { dev ->
                 PairedDeviceRow(
@@ -160,9 +159,16 @@ class DevicesViewModel(
     }
 }
 
-// ---- UI state types ----
+// ---------- UI state types ----------
 
-/** Top-level UI state for the Devices screen. */
+/**
+ * Top-level UI state for the Devices screen.
+ *
+ * Marked [Immutable] so Compose's stability inference skips equals checks
+ * on every recomposition pass - the lists are replaced as wholes, never
+ * mutated in place, so the contract holds.
+ */
+@androidx.compose.runtime.Immutable
 data class DevicesUiState(
     val paired: List<PairedDeviceRow>,
     val discovered: List<DiscoveredDevice>,
@@ -179,12 +185,13 @@ data class DevicesUiState(
     }
 }
 
+@androidx.compose.runtime.Immutable
 data class PairedDeviceRow(
     val device: Device,
     val online: Boolean
 )
 
-/** Pairing dialog Lifecycle (design doc §11.3). */
+/** Pairing dialog lifecycle (design doc §11.3). */
 sealed class PairingUiState {
     /** Dialog is closed. */
     data object Idle : PairingUiState()
@@ -195,9 +202,9 @@ sealed class PairingUiState {
         val descriptor: PairingSessionDescriptor
     ) : PairingUiState()
 
-    /** Pairing finished – render a success toast then auto-dismiss. */
+    /** Pairing finished - render a success toast then auto-dismiss. */
     data class Succeeded(val peer: DiscoveredDevice) : PairingUiState()
 
-    /** Pairing failed – wrong PIN, expired, network error. */
+    /** Pairing failed - wrong PIN, expired, network error. */
     data class Failed(val message: String) : PairingUiState()
 }

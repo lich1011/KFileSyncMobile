@@ -1,5 +1,8 @@
 -- TransferJob.sq (design doc §10.1)
 -- Transfer-aggregate persistence: per-job header + per-file items.
+--
+-- Phase 2 (T2.1 / T2.4) adds: direction column (already in schema),
+--  - findById, findAll (ordered most-recent first), delete (cascade via FK).
 
 CREATE TABLE transfer_jobs (
     job_id            TEXT NOT NULL PRIMARY KEY,
@@ -24,18 +27,33 @@ CREATE TABLE transfer_items (
     file_path    TEXT NOT NULL,
     file_size    INTEGER NOT NULL,
     sha256       TEXT NOT NULL,
+    chunk_size   INTEGER NOT NULL DEFAULT 0,
+    chunk_hashes TEXT NOT NULL DEFAULT '[]',
     status       TEXT NOT NULL DEFAULT 'pending',
     chunks_total INTEGER NOT NULL DEFAULT 0,
     chunks_done  INTEGER NOT NULL DEFAULT 0,
     temp_path    TEXT,
     PRIMARY KEY (job_id, file_id),
-    FOREIGN KEY (job_id) REFERENCES transfer_jobs(job_id)
+    FOREIGN KEY (job_id) REFERENCES transfer_jobs(job_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_transfer_jobs_status ON transfer_jobs(status);
 
+-- Phase 6 (T6.2): `findAll` does `ORDER BY updated_at DESC`. Without this
+-- index SQLite has to materialize the whole table and sort; with the index
+-- it can stream rows in order. Combined with the LazyColumn virtualization
+-- in TransfersScreen, this keeps history-list rendering O(log N + visible)
+-- even when the user has thousands of historical transfers.
+CREATE INDEX IF NOT EXISTS idx_transfer_jobs_updated ON transfer_jobs(updated_at DESC);
+
 findIncomplete:
 SELECT * FROM transfer_jobs WHERE status IN ('pending', 'active', 'paused');
+
+findById:
+SELECT * FROM transfer_jobs WHERE job_id = ?;
+
+findAll:
+SELECT * FROM transfer_jobs ORDER BY updated_at DESC;
 
 insertJob:
 INSERT OR REPLACE INTO transfer_jobs(job_id, session_id, job_type, direction, peer_device_id, share_id, status, total_bytes, transferred_bytes, total_files, completed_files, error_message, created_at, updated_at)
@@ -44,12 +62,32 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 updateProgress:
 UPDATE transfer_jobs SET transferred_bytes = ?, completed_files = ?, status = ?, updated_at = ? WHERE job_id = ?;
 
+updateStatus:
+UPDATE transfer_jobs SET status = ?, error_message = ?, updated_at = ? WHERE job_id = ?;
+
+deleteJob:
+DELETE FROM transfer_jobs WHERE job_id = ?;
+
+deleteItemsForJob:
+DELETE FROM transfer_items WHERE job_id = ?;
+
 getItemsForJob:
 SELECT * FROM transfer_items WHERE job_id = ?;
 
+-- Phase 6 (T6.2): batched item-loader - used by `findAll` /
+-- `findIncompleteJobs` to avoid the N+1 query pattern. The caller groups
+-- results by `job_id` client-side. We deliberately don't take a list
+-- parameter because SQLDelight 2.x doesn't support IN-clauses with a Kotlin
+-- list cleanly across all drivers; a single ORDER BY is the cheapest path.
+getAllItems:
+SELECT * FROM transfer_items ORDER BY job_id;
+
 insertItem:
-INSERT OR REPLACE INTO transfer_items(job_id, file_id, file_path, file_size, sha256, status, chunks_total, chunks_done, temp_path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO transfer_items(job_id, file_id, file_path, file_size, sha256, chunk_size, chunk_hashes, status, chunks_total, chunks_done, temp_path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateItemProgress:
 UPDATE transfer_items SET chunks_done = ?, status = ? WHERE job_id = ? AND file_id = ?;
+
+updateItemTempPath:
+UPDATE transfer_items SET temp_path = ? WHERE job_id = ? AND file_id = ?;

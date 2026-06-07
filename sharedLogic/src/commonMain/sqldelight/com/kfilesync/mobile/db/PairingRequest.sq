@@ -17,6 +17,12 @@ CREATE TABLE pairing_requests (
     expires_at          INTEGER NOT NULL
 );
 
+-- Phase 6 (T6.2): `findPending` and `cleanup` both filter on `(status,
+-- expires_at)`. A composite index covering both lets SQLite use the index
+-- for the range scan instead of a table scan + sort.
+CREATE INDEX IF NOT EXISTS idx_pairing_requests_status_expires
+    ON pairing_requests(status, expires_at);
+
 findById:
 SELECT * FROM pairing_requests WHERE request_id = ?;
 

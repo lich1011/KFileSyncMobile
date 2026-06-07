@@ -53,7 +53,7 @@ class SqlDelightDeviceRepo(
             .map { it.toDomain() }
     }
 
-    override suspend fun save(device: Device) = withContext(Dispatchers.Default) {
+    override suspend fun save(device: Device): Long = withContext(Dispatchers.Default) {
         val now = Clock.System.now().toEpochMilliseconds()
         val (trustStatus, pairedAt) = trustColumns(device.state)
         db.deviceQueries.insert(
@@ -67,23 +67,23 @@ class SqlDelightDeviceRepo(
             paired_at = pairedAt,
             last_seen_at = now,
             created_at = now
-        )
+        ).value
     }
 
-    override suspend fun updateTrustStatus(id: DeviceId, status: TrustStatus) = withContext(Dispatchers.Default) {
+    override suspend fun updateTrustStatus(id: DeviceId, status: TrustStatus): Long = withContext(Dispatchers.Default) {
         val pairedAt = if (status == TrustStatus.Paired) Clock.System.now().toEpochMilliseconds() else null
         db.deviceQueries.updateTrustStatus(
             trust_status = trustStatusToWire(status),
             paired_at = pairedAt,
             device_id = id.value
-        )
+        ).value
     }
 
     override suspend fun updateLastSeen(
         id: DeviceId,
         lastSeenAt: Instant,
         addresses: List<DeviceAddress>?
-    ) = withContext(Dispatchers.Default) {
+    ): Long = withContext(Dispatchers.Default) {
         // The schema lets us update last_seen_at and addresses together; we
         // pass either the new list (re-encoded) or null to leave the column
         // untouched. SQLDelight will pass null straight through to SQLite.
@@ -91,11 +91,11 @@ class SqlDelightDeviceRepo(
             last_seen_at = lastSeenAt.toEpochMilliseconds(),
             addresses = addresses?.let { addressesToJsonOrNull(it) },
             device_id = id.value
-        )
+        ).value
     }
 
-    override suspend fun delete(id: DeviceId) = withContext(Dispatchers.Default) {
-        db.deviceQueries.delete(device_id = id.value)
+    override suspend fun delete(id: DeviceId): Long = withContext(Dispatchers.Default) {
+        db.deviceQueries.delete(device_id = id.value).value
     }
 
     // ------------------ row -> domain mapping ------------------

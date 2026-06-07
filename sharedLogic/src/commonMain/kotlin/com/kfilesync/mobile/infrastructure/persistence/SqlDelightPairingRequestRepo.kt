@@ -30,7 +30,7 @@ class SqlDelightPairingRequestRepo(
     private val db: KFileSyncDatabase
 ) : PairingRequestRepository {
 
-    override suspend fun save(session: PairingSession) = withContext(Dispatchers.Default) {
+    override suspend fun save(session: PairingSession): Long = withContext(Dispatchers.Default) {
         db.pairingRequestQueries.insert(
             request_id = session.sessionId,
             peer_device_id = session.peerDeviceId.value,
@@ -42,7 +42,7 @@ class SqlDelightPairingRequestRepo(
             attempts_remaining = session.attemptsRemaining.toLong(),
             created_at = session.createdAt.toEpochMilliseconds(),
             expires_at = session.expiry.expiresAt.toEpochMilliseconds()
-        )
+        ).value
     }
 
     override suspend fun findById(sessionId: String): PairingSession? = withContext(Dispatchers.Default) {
@@ -57,8 +57,8 @@ class SqlDelightPairingRequestRepo(
             .map { it.toDomain() }
     }
 
-    override suspend fun cleanupExpired(now: Instant) = withContext(Dispatchers.Default) {
-        db.pairingRequestQueries.cleanup(now.toEpochMilliseconds())
+    override suspend fun cleanupExpired(now: Instant): Long = withContext(Dispatchers.Default) {
+        db.pairingRequestQueries.cleanup(now.toEpochMilliseconds()).value
     }
 
     // -------- row <-> domain --------

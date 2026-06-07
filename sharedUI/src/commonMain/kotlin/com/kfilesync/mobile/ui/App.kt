@@ -7,7 +7,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.kfilesync.mobile.ui.navigation.AppNavigation
 import com.kfilesync.mobile.ui.theme.AppTheme
-import org.koin.compose.KoinContext
 
 /**
  * Top-level composable shared by Android & iOS.
@@ -20,10 +19,8 @@ import org.koin.compose.KoinContext
 @Composable
 fun App() {
     AppTheme {
-        KoinContext {
-            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                AppNavigation()
-            }
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            AppNavigation()
         }
     }
 }
