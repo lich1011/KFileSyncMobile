@@ -52,6 +52,8 @@ data class PairingSession(
     val pin: PairingCode,
     val nonce: Nonce,
     val peerFingerprint: Fingerprint,
+    val peerAlias: String,
+    val peerPlatform: DevicePlatform,
     val expiry: SessionExpiry,
     val attemptsRemaining: Int = MAX_ATTEMPTS,
     val status: PairingStatus = PairingStatus.Pending,
@@ -134,6 +136,8 @@ data class PairingSession(
             pin: PairingCode,
             nonce: Nonce,
             peerFingerprint: Fingerprint,
+            peerAlias: String,
+            peerPlatform: DevicePlatform,
             createdAt: Instant,
             ttl: Duration = DEFAULT_TTL
         ): PairingSession = PairingSession(
@@ -143,6 +147,8 @@ data class PairingSession(
             pin = pin,
             nonce = nonce,
             peerFingerprint = peerFingerprint,
+            peerAlias = peerAlias,
+            peerPlatform= peerPlatform,
             expiry = SessionExpiry(createdAt + ttl),
             createdAt = createdAt
         )
@@ -155,6 +161,8 @@ data class PairingSession(
             pin: PairingCode,
             nonce: Nonce,
             peerFingerprint: Fingerprint,
+            peerAlias: String,
+            peerPlatform: DevicePlatform,
             ttl: Duration = DEFAULT_TTL
         ): PairingSession = newPending(
             sessionId = sessionId,
@@ -163,6 +171,8 @@ data class PairingSession(
             pin = pin,
             nonce = nonce,
             peerFingerprint = peerFingerprint,
+            peerAlias = peerAlias,
+            peerPlatform= peerPlatform,
             createdAt = Clock.System.now(),
             ttl = ttl
         )

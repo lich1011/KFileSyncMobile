@@ -57,6 +57,8 @@ junit = "4.13.2"
 # so this is androidMain-only.
 bouncycastle = "1.78.1"
 
+jna = "5.14.0"
+
 [libraries]
 # ---- Kotlin test ----
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -123,6 +125,9 @@ napier = { module = "io.github.aakira:napier", version.ref = "napier" }
 kotlinx-atomicfu = {module = "org.jetbrains.kotlinx:atomicfu", version.ref = "atomicfu"}
 
 bouncycastle-bcpkix = {module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle"}
+
+# --- JNA ---
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 # ---- Navigation ----
 voyager-navigator = { module = "cafe.adriel.voyager:voyager-navigator", version.ref = "voyager" }

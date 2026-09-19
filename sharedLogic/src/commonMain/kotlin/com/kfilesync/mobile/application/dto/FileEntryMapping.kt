@@ -17,18 +17,23 @@ import kotlin.time.Instant
  */
 
 fun FileEntry.toDto(): FileEntryDto = FileEntryDto(
+    shareId = shareId.value,
     path = path,
     entryType = when (entryType) {
         EntryType.File -> "file"
         EntryType.Directory -> "directory"
     },
     size = size,
-    modifiedAtEpochMs = modifiedAt?.toEpochMilliseconds(),
-    modifiedBy = modifiedBy?.value,
+    modifiedAtEpochMs = (modifiedAt ?: updatedAt).toEpochMilliseconds(),
+    modifiedBy = modifiedBy?.value.orEmpty(),
     versionVector = versionVector.entries.mapKeys { it.key.value },
     sha256 = sha256?.sha256Hex,
-    blocks = blocks,
-    deleted = deleted
+    // FileEntry.blocks is a bare BLAKE3-hex list; block size isn't tracked
+    // domain-side (dead field in production - see FileEntry.blocks), so we
+    // report 0 rather than inventing a chunking strategy here.
+    blocks = blocks.mapIndexed { index, hash -> BlockInfoDto(index = index, size = 0, hash = hash) },
+    deleted = deleted,
+    deletedAtMs = deletedAt?.toEpochMilliseconds()
 )
 
 fun FileEntryDto.toDomain(shareId: ShareId, updatedAt: Instant): FileEntry = FileEntry(
@@ -36,12 +41,12 @@ fun FileEntryDto.toDomain(shareId: ShareId, updatedAt: Instant): FileEntry = Fil
     path = path,
     entryType = if (entryType == "directory") EntryType.Directory else EntryType.File,
     size = size,
-    modifiedAt = modifiedAtEpochMs?.let { Instant.fromEpochMilliseconds(it) },
-    modifiedBy = modifiedBy?.let { DeviceId(it) },
+    modifiedAt = Instant.fromEpochMilliseconds(modifiedAtEpochMs),
+    modifiedBy = modifiedBy.takeIf { it.isNotBlank() }?.let { DeviceId(it) },
     versionVector = VersionVector(versionVector.mapKeys { DeviceId(it.key) }),
     sha256 = sha256?.let { ContentHash(it) },
-    blocks = blocks,
+    blocks = blocks.map { it.hash },
     deleted = deleted,
-    deletedAt = if (deleted) modifiedAtEpochMs?.let { Instant.fromEpochMilliseconds(it) } else null,
+    deletedAt = deletedAtMs?.let { Instant.fromEpochMilliseconds(it) },
     updatedAt = updatedAt
 )

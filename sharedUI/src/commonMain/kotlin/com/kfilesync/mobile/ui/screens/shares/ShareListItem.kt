@@ -1,5 +1,6 @@
 package com.kfilesync.mobile.ui.screens.shares
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ fun ShareListItem(
     onResume: () -> Unit,
     onLeave: () -> Unit,
     readOnly: Boolean = false,
+    onOpen: (()-> Unit)? =null,
     modifier: Modifier = Modifier
 ) {
     Card(modifier = modifier.fillMaxWidth()) {

@@ -4,5 +4,38 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	
+	<!-- Phase 6 T6.4 - permission usage descriptions. -->
+	<!-- Required on iOS 14+: without it the Local Network permission prompt
+	     never appears and ALL mDNS/Bonjour discovery + LAN connections silently
+	     fail. The string is shown to the user in the system prompt. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>KFileSync finds and connects to your other devices on the local network to transfer and sync files directly
+, without going through the internet.</string>
+
+	<!-- Bonjour service types the app advertises/browses. Must exactly match
+	     IosNwBrowserDiscovery.SERVICE_TYPE; a mismatch makes discovery return
+	     nothing on iOS 14+. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_lansync._tcp</string>
+	</array>
+
+	<!-- Background execution modes for the BGTaskScheduler work (T5.1). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+
+	<!-- BGTaskScheduler identifiers. Apple validates this set at launch and
+	     refuses to register any identifier not listed here. Must match
+	     IosBackgroundSync.TASK_REFRESH / TASK_PROCESS. (PHASE_5_SUMMARY claimed
+	     these were already declared; they were not - added 2026-06-07.) -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.kfilesync.mobile.sync.refresh</string>
+		<string>com.kfilesync.mobile.sync.process</string>
+	</array>
 </dict>
 </plist>

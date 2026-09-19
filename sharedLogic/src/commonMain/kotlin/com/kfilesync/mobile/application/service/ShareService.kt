@@ -2,6 +2,7 @@ package com.kfilesync.mobile.application.service
 
 import com.kfilesync.mobile.application.dto.ShareAuthorizeDto
 import com.kfilesync.mobile.application.dto.ShareInviteDto
+import com.kfilesync.mobile.application.dto.ShareLeaveDto
 import com.kfilesync.mobile.application.identity.LocalIdentityProvider
 import com.kfilesync.mobile.domain.DomainError
 import com.kfilesync.mobile.domain.event.ShareAccepted
@@ -57,8 +58,8 @@ interface ShareAppService {
     /** Sets up a 'Pending' share row from an inbound '/share/invite'. Idempotent on 'shareId'. */
     suspend fun onShareInvite(body: ShareInviteDto): Result<Unit>
 
-    /** Records an authorization update from '/share/authorize'. */
-    suspend fun onShareAuthorize(body: ShareAuthorizeDto): Result<Unit>
+    /** Records an authorization update from '/share/authorize'. [fromDeviceId] is the invitee, taken from the verified X-Device-Id header. */
+    suspend fun onShareAuthorize(body: ShareAuthorizeDto, fromDeviceId: DeviceId): Result<Unit>
 
     /** UI action: user accepted an invitation; pick a local destination directory. */
     suspend fun acceptInvitation(shareId: ShareId, localPath: String): Result<Unit>
@@ -72,8 +73,11 @@ interface ShareAppService {
     /** UI action: resume a Paused share. */
     suspend fun resumeShare(shareId: ShareId): Result<Unit>
 
-    /** UI action: leave the share entirely. Phase 4 will additionally inform the creator via '/share/leave'. */
+    /** UI action: leave the share entirely. The creator is informed via '/share/leave' (CascadeHandler on ShareLeft). */
     suspend fun leaveShare(shareId: ShareId): Result<Unit>
+
+    /** Inbound '/share/leave' from a peer: drop their membership, or mark Left locally if the creator left. */
+    suspend fun onShareLeave(body: ShareLeaveDto): Result<Unit>
 
     /** Hot stream of every share row, most-recent first. */
     fun observeShares(): Flow<List<ShareRow>>
@@ -86,12 +90,12 @@ interface ShareAppService {
  * Phase 3 implementation (T3.1 - T3.4).
  *
  * Inbound flow (peer creates share, invites us):
- * 1. Peer POSTs '/share/invite' -> [onShareInvite] persists a 'Pending'
- * share, publishes [ShareInvited] for the UI banner.
+ * 1. Peer POSTs "/share/invite" -> [onShareInvite] persists a 'Pending'
+ *    share, publishes [ShareInvited] for the UI banner.
  * 2. User opens the banner, picks a local directory -> UI calls
- * [acceptInvitation] -> flips to 'Active', persists the local mapping.
+ *    [acceptInvitation] -> flips to 'Active', persists the local mapping.
  * 3. (Phase 4) Peer POSTs '/share/authorize' once we're a member; we
- * record the authorization in [onShareAuthorize].
+ *    record the authorization in [onShareAuthorize].
  *
  * Outbound flow (Phase 2 - mobile creates a share) is deferred to a future
  * milestone; mobile MVP only joins shares created by the desktop.
@@ -155,8 +159,8 @@ class ShareServiceImpl(
             createdBy = fromId,
             // Issue #37: clamp the peer-asserted permission to a safe
             // default. A malicious / buggy peer could otherwise claim
-            // SharePermission.Owner for itself by sending `permission =
-            // "owner"`. We accept the wire string but reject anything we
+            // SharePermission.Owner for itself by sending 'permission =
+            // "owner"'. We accept the wire string but reject anything we
             // don't know how to handle, and downgrade unexpected values
             // to ReadOnly (the most restrictive option) instead of
             // trusting it blindly.
@@ -172,27 +176,36 @@ class ShareServiceImpl(
         Result.success(Unit)
     }
 
-    override suspend fun onShareAuthorize(body: ShareAuthorizeDto): Result<Unit> = lock.withLock {
+    override suspend fun onShareAuthorize(body: ShareAuthorizeDto, fromDeviceId: DeviceId): Result<Unit> = lock.withLock {
+        val from = deviceRepository.findById(fromDeviceId)
+        if (from == null || from.state !is DeviceState.Paired) {
+            Napier.w("rejecting /share/authorize from untrusted ${fromDeviceId.value}")
+            return Result.failure(DomainError.DeviceNotTrusted(fromDeviceId))
+        }
+
         val shareId = ShareId(body.shareId)
         val share = shareRepository.findById(shareId)
             ?: return Result.failure(DomainError.ShareNotFound(shareId))
 
-        val authorizedBy = DeviceId(body.authorizedBy)
-        val from = deviceRepository.findById(authorizedBy)
-        if (from == null || from.state !is DeviceState.Paired) {
-            return Result.failure(DomainError.DeviceNotTrusted(authorizedBy))
+        if (!body.accepted) {
+            // Invitee declined - drop any membership row we may have created.
+            shareRepository.removeMember(shareId, fromDeviceId)
+            publishRows()
+            Napier.i("share ${body.shareId}: ${from.alias} declined (${body.reason ?: "no reason given"})")
+            return Result.success(Unit)
         }
 
         val member = ShareMember(
-            deviceId = DeviceId(body.deviceId),
-            permission = SharePermission.fromWire(body.permission),
-            authorizedBy = authorizedBy,
+            deviceId = fromDeviceId,
+            permission = share.permission,
+            authorizedBy = share.createdBy,
             authorizedAt = clock()
         )
 
         val updated = share.withMember(member).copy(updatedAt = clock())
         shareRepository.save(updated)
         publishRows()
+        Napier.i("share ${body.shareId}: ${from.alias} accepted")
         Result.success(Unit)
     }
 
@@ -248,6 +261,7 @@ class ShareServiceImpl(
         val paused = share.pause(clock()).getOrElse {
             return Result.failure(it as Throwable)
         }
+
         // save() upserts the header (status+updatedAt) + member rows in one
         // transaction; no separate updateStatus call needed.
         shareRepository.save(paused)
@@ -262,6 +276,7 @@ class ShareServiceImpl(
         val resumed = share.resume(clock()).getOrElse {
             return Result.failure(it as Throwable)
         }
+
         shareRepository.save(resumed)
         publishRows()
         eventBus.publish(ShareResumed(shareId))
@@ -274,6 +289,7 @@ class ShareServiceImpl(
         val left = share.leave(clock()).getOrElse {
             return Result.failure(it as Throwable)
         }
+
         shareRepository.save(left)
         publishRows()
         eventBus.publish(ShareLeft(shareId, reason = "user left share"))
@@ -281,11 +297,41 @@ class ShareServiceImpl(
         Result.success(Unit)
     }
 
+    override suspend fun onShareLeave(body: ShareLeaveDto): Result<Unit> = lock.withLock {
+        val leaver = DeviceId(body.deviceId)
+        val from = deviceRepository.findById(leaver)
+        if (from == null || from.state !is DeviceState.Paired) {
+            Napier.w("rejecting /share/leave from untrusted ${body.deviceId}")
+            return Result.failure(DomainError.DeviceNotTrusted(leaver))
+        }
+
+        val shareId = ShareId(body.shareId)
+        val share = shareRepository.findById(shareId)
+            ?: return Result.failure(DomainError.ShareNotFound(shareId))
+
+        if (share.createdBy == leaver) {
+            // The creator left -> the share is no longer reachable; mark Left.
+            if (share.status != ShareStatus.Left) {
+                val left = share.leave(clock()).getOrElse { return Result.failure(it as Throwable) }
+                shareRepository.save(left)
+            }
+        } else {
+            // A peer member left -> drop just their membership row.
+            shareRepository.removeMember(shareId, leaver)
+        }
+
+        publishRows()
+        // Deliberately NOT publishing ShareLeft here: that would make our own
+        // CascadeHandler POST /share/leave back to the peer, ping-ponging.
+        Napier.i("share ${body.shareId}: peer ${body.deviceId.take(8)} left")
+        Result.success(Unit)
+    }
+
     override suspend fun resumeAfterRestart() {
         publishRows()
     }
 
-    //  helpers
+    // helpers
 
     private suspend fun publishRows() {
         val all = shareRepository.findAll().sortedByDescending { it.updatedAt }

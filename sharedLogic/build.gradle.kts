@@ -40,7 +40,7 @@ kotlin {
         }
     }
 
-    androidLibrary {
+    android {
         namespace = "com.kfilesync.mobile.sharedLogic"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
@@ -83,11 +83,25 @@ kotlin {
             // Logging
             implementation(libs.napier)
         }
+
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.koin.test)
         }
+
+        getByName("androidHostTest") {
+            // Conformance runner (1.3): the UniFFI-generated Kotlin wrapper
+            // (kfilesync-conformance's Kotlin counterpart to
+            // rust-runner/src/main.rs) needs JNA to load the host-native
+            // cdylib, and only the JVM-run host test target can do that -
+            // commonTest also compiles for iOS, where there is no JNA/JVM.
+            kotlin.srcDir(rootProject.file("../KFileSyncCore/build/android/kotlin"))
+            dependencies {
+                implementation(libs.jna)
+            }
+        }
+
         androidMain.dependencies {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.sqldelight.androidDriver)
@@ -99,10 +113,11 @@ kotlin {
             implementation(libs.androidx.documentfile)
             implementation(libs.androidx.lifecycle.process)
         }
+
         iosMain.dependencies {
             implementation(libs.sqldelight.nativeDriver)
             implementation(libs.ktor.client.darwin)
-//            implementation(libs.kotlinx.atomicfu)
+            implementation(libs.kotlinx.atomicfu)
         }
     }
 }
@@ -113,4 +128,17 @@ sqldelight {
             packageName.set("com.kfilesync.mobile.db")
         }
     }
+}
+
+// Conformance runner (1.3) wiring: point the host-JVM test at kfilesync-core's
+// sibling checkout so it can (a) load the host-native cdylib via JNA and
+// (b) read the shared fixtures without copying either into this repo.
+// KFileSyncCore's `target/debug` dylib and `build/android/kotlin` bindings
+// come from `./scripts/build-android.sh dev` and are gitignored there - a
+// missing directory here just means that script hasn't been run yet.
+val coreRepoDir = rootProject.file("../KFileSyncCore")
+tasks.matching { it.name == "testAndroidHostTest" }.configureEach {
+    this as Test
+    systemProperty("jna.library.path", coreRepoDir.resolve("target/debug").absolutePath)
+    systemProperty("conformance.fixtures.dir", coreRepoDir.resolve("kfilesync-conformance/fixtures").absolutePath)
 }

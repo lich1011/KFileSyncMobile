@@ -23,8 +23,8 @@ data class DeviceInfoDto(
     @SerialName("device_id") val deviceId: String,
     val alias: String,
     @SerialName("device_type") val deviceType: String,      // "desktop" | "mobile"
-    val platform: String,                                   // "windows" | "macos" | "linux" | "android" | "ios"
-    val fingerprint: String,                                // SHA-256 hex of TLS cert
+    val platform: String,                                  // "windows" | "macos" | "linux" | "android" | "ios"
+    val fingerprint: String,                               // SHA-256 hex of TLS cert
     val port: Int = 53317,
     val announce: Boolean = true
 )
@@ -47,7 +47,7 @@ data class RegisterResponseDto(
     val reason: String? = null
 )
 
-// --------- /api/lansync/v1/pair/* ---------
+// ---------- /api/lansync/v1/pair/* ----------
 
 /**
  * `POST /pair/request` body.
@@ -62,43 +62,42 @@ data class RegisterResponseDto(
  * - Peer ALSO generates a PIN locally and displays it on its screen.
  * - User reads each side's PIN to the other (two-channel OOB).
  * - `/pair/confirm` then carries the peer-displayed PIN that the
- * originator typed; the peer validates against its own stored PIN.
+ *   originator typed; the peer validates against its own stored PIN.
  */
 @Serializable
 data class PairRequestDto(
     @SerialName("request_id") val requestId: String,
     @SerialName("from_device_id") val fromDeviceId: String,
     @SerialName("from_alias") val fromAlias: String,
+    @SerialName("from_platform") val fromPlatform: String,
     @SerialName("from_fingerprint") val fromFingerprint: String,
     val nonce: String,
-    @SerialName("expires_at") val expiresAtEpochMs: Long
+    @SerialName("expires_at_ms") val expiresAtEpochMs: Long
 )
 
 @Serializable
 data class PairConfirmDto(
     @SerialName("request_id") val requestId: String,
     val pin: String,
-    @SerialName("certificate_pem") val certificatePem: String, // exchanged on confirmation
-    // Sender's alias + platform, used so the receiver can record a useful
-    // display name instead of the hardcoded "Peer" placeholder (issue #12).
-    @SerialName("from_alias") val fromAlias: String = "",
-    @SerialName("from_platform") val fromPlatform: String = ""
+    @SerialName("certificate_pem") val certificatePem: String // exchanged on confirmation
 )
 
 @Serializable
 data class PairRevokeDto(
     @SerialName("device_id") val deviceId: String,
-    val reason: String? = null
+    val reason: String? = null,
+    @SerialName("revoked_at_ms") val revokedAtMs: Long
 )
 
 @Serializable
 data class PairResultDto(
-    val ok: Boolean,
-    val error: String? = null,
-    @SerialName("peer_certificate_pem" )val peerCertificatePem: String? =null
+    @SerialName("request_id") val requestId: String,
+    val accepted: Boolean,
+    @SerialName("peer_certificate_pem") val peerCertificatePem: String? = null,
+    val reason: String? = null
 )
 
-/// --------- /api/lansync/v1/transfer/* (Phase 2) ---------
+// ---------- /api/lansync/v1/transfer/* (Phase 2) ----------
 
 /**
  * Outbound transfer request - sender sends this to the receiver's
@@ -127,7 +126,7 @@ data class TransferFileDto(
 )
 
 /**
- * Receiver's reply to `/transfer/request`. `accepted=true` allows the
+ * Receiver's reply to `/transfer/request`, `accepted=true` allows the
  * sender to start streaming; `skipChunks` is the resume map:
  * `fileId -> [list of chunk indices already received and verified]`.
  * Sender skips any indices in the list. Empty map = full transfer.
@@ -163,19 +162,14 @@ data class TransferChunkDto(
 
 @Serializable
 data class TransferChunkAckDto(
-    val ok: Boolean,
+    @SerialName("job_id") val jobId: String,
     @SerialName("file_id") val fileId: String,
     @SerialName("chunk_index") val chunkIndex: Int,
-    /** True when this chunk completed the whole file (receiver did SHA-256 + atomic move). */
-    @SerialName("file_completed") val fileCompleted: Boolean = false,
-    /** True when this chunk completed the whole job. */
-    @SerialName("job_completed") val jobCompleted: Boolean = false,
-    val error: String? = null
+    val verified: Boolean
 )
 
 @Serializable
 data class TransferCancelDto(
-    @SerialName("session_id") val sessionId: String,
     @SerialName("job_id") val jobId: String,
     val reason: String? = null
 )
@@ -186,23 +180,36 @@ data class TransferResultDto(
     val error: String? = null
 )
 
-// --------- /api/lansync/v1/share/* ---------
+// ---------- /api/lansync/v1/share/* ----------
 
 @Serializable
 data class ShareInviteDto(
     @SerialName("share_id") val shareId: String,
     @SerialName("share_name") val shareName: String,
     @SerialName("from_device_id") val fromDeviceId: String,
-    val permission: String, // "read_only" | "read_write" | ...
-    @SerialName("sync_mode") val syncMode: String // "one_way_push" | "one_way_pull" | ...
+    @SerialName("default_permission") val permission: String, // "read_only" | "read_write" | ...
+    @SerialName("sync_mode") val syncMode: String,           // "one_way_push" | "one_way_pull" | ...
+    @SerialName("invited_at_ms") val invitedAtMs: Long
 )
 
+/**
+ * Invitee's response to a [ShareInviteDto], sent to the share's creator
+ * (direction is invitee -> creator, not creator -> device). The sender's
+ * identity comes from the anti-replay-verified `X-Device-Id` header, not
+ * from this body - see `HttpServer.kt`'s `/share/authorize` route.
+ */
 @Serializable
 data class ShareAuthorizeDto(
     @SerialName("share_id") val shareId: String,
+    val accepted: Boolean,
+    val reason: String? = null
+)
+
+@Serializable
+data class ShareLeaveDto(
+    @SerialName("share_id") val shareId: String,
     @SerialName("device_id") val deviceId: String,
-    val permission: String,
-    @SerialName("authorized_by") val authorizedBy: String
+    @SerialName("left_at_ms") val leftAtMs: Long
 )
 
 @Serializable
@@ -216,20 +223,30 @@ data class ShareResultDto(
 @Serializable
 data class IndexResponseDto(
     @SerialName("share_id") val shareId: String,
+    @SerialName("index_version") val indexVersion: Long,
     val entries: List<FileEntryDto>
 )
 
 @Serializable
+data class BlockInfoDto(
+    val index: Int,
+    val size: Int,
+    val hash: String
+)
+
+@Serializable
 data class FileEntryDto(
+    @SerialName("share_id") val shareId: String,
     val path: String,
     @SerialName("entry_type") val entryType: String,        // "file" | "directory"
     val size: Long,
-    @SerialName("modified_at") val modifiedAtEpochMs: Long? = null,
-    @SerialName("modified_by") val modifiedBy: String? = null,
+    @SerialName("modified_at_ms") val modifiedAtEpochMs: Long,
+    @SerialName("modified_by") val modifiedBy: String,
     @SerialName("version_vector") val versionVector: Map<String, Long>,
     val sha256: String? = null,
-    val blocks: List<String> = emptyList(),
-    val deleted: Boolean = false
+    val blocks: List<BlockInfoDto> = emptyList(),
+    val deleted: Boolean = false,
+    @SerialName("deleted_at_ms") val deletedAtMs: Long? = null
 )
 
 @Serializable
@@ -240,7 +257,7 @@ data class BlocksRequestDto(
 
 @Serializable
 data class BlocksResponseDto(
-    val blocks: Map<String, String>                         // BLAKE3 hex -> base64(content) - Phase 4
+    val blocks: Map<String, String>                          // BLAKE3 hex -> base64(content) - Phase 4
 )
 
 // ---------- /api/lansync/v1/info error wrapper ----------

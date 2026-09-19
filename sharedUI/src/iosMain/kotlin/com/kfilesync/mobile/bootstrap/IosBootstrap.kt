@@ -101,6 +101,16 @@ fun iosBootstrap() {
     val identity = koin.get<LocalIdentityProvider>().current()
     Napier.i("local identity ready: deviceId=${identity.deviceId.value.take(12)}...")
 
+    // 2a. Picker bridge: connect the file/directory picker request flows to the
+    //     Swift presentation layer. KFileSyncBridge.register() (called from
+    //     iOSApp.init) sets the actual present-closures. Without this install,
+    //     IosFilePicker.pickFiles() / IosDirectoryPicker.pickDirectory() would
+    //     suspend forever and iOS send / share-accept would never complete.
+    IosPickerBridge.install(
+        filePicker = koin.get<com.kfilesync.mobile.platform.IosFilePicker>(),
+        directoryPicker = koin.get<com.kfilesync.mobile.platform.IosDirectoryPicker>()
+    )
+
     // 3. T5.2 crash recovery - before transfer / share rehydration.
     val crashRecoveryService: CrashRecoveryService = koin.get()
     appScope.launch {

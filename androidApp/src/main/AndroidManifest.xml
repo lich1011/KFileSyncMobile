@@ -15,6 +15,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
         tools:targetApi="34"/>
 
+    <!-- Phase 6 T6.4: required on Android 13+ for the transfer/sync
+         foreground-service notification to be shown (runtime-requested). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"
+        tools:targetApi="33"/>
 
     <application
         android:name=".KFileSyncApplication"
@@ -33,6 +37,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <!-- Transfer/sync progress foreground service (T2.5). Must be declared
+             with a foregroundServiceType matching FOREGROUND_SERVICE_DATA_SYNC;
+             starting an undeclared foreground service throws at runtime. -->
+        <service
+            android:name=".service.SyncForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

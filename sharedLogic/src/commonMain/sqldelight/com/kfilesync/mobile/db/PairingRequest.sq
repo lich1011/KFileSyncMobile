@@ -14,7 +14,12 @@ CREATE TABLE pairing_requests (
     nonce               TEXT NOT NULL,
     attempts_remaining  INTEGER NOT NULL DEFAULT 3,
     created_at          INTEGER NOT NULL,
-    expires_at          INTEGER NOT NULL
+    expires_at        INTEGER NOT NULL,
+    -- Captured from PairRequestDto at receiveIncoming() time so
+    -- confirmIncoming() can learn the peer's display identity without
+    -- PairConfirmDto carrying it on the wire (issue #12).
+    peer_alias        TEXT NOT NULL DEFAULT '',
+    peer_platform     TEXT NOT NULL DEFAULT ''
 );
 
 -- Phase 6 (T6.2): `findPending` and `cleanup` both filter on `(status,
@@ -33,8 +38,8 @@ WHERE status = 'pending' AND expires_at > ?;
 insert:
 INSERT OR REPLACE INTO pairing_requests(
     request_id, peer_device_id, direction, status, pin, peer_fingerprint,
-    nonce, attempts_remaining, created_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    nonce, attempts_remaining, created_at, expires_at, peer_alias, peer_platform
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateStatusAndAttempts:
 UPDATE pairing_requests

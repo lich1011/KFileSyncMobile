@@ -27,6 +27,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,11 +55,11 @@ import org.koin.compose.viewmodel.koinViewModel
  *
  * Phase 6 (T6.1) polish:
  * - Whole screen is a single LazyColumn (was nested LazyColumns inside
- * a Column, which is non-deterministic on iOS height-measurement).
+ *   a Column, which is non-deterministic on iOS height-measurement).
  * - Pending-invitation cards animate in via [AnimatedVisibility] so a
- * fresh invite from the desktop slides into view rather than popping.
+ *   fresh invite from the desktop slides into view rather than popping.
  * - Accent containerColor on the pending-invitation card uses the M3
- * secondaryContainer role for theme-aware contrast.
+ *   secondaryContainer role for theme-aware contrast.
  */
 @Composable
 fun SharesScreen(
@@ -64,6 +67,27 @@ fun SharesScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     val ui by viewModel.uiState.collectAsState()
+    var selectedShareId by remember { mutableStateOf<String?>(null) }
+
+    // Detail view (T3.6): when a row is tapped we swap the list for the detail
+    // screen. The tab shell has no nav stack, so selection state lives here.
+    val selectedRow = selectedShareId?.let { id ->
+        (ui.pending + ui.active + ui.history).firstOrNull { it.shareId.value == id }
+    }
+    if (selectedRow != null) {
+        ShareDetailScreen(
+            row = selectedRow,
+            onBack = { selectedShareId = null },
+            onPause = { viewModel.pause(selectedRow.shareId) },
+            onResume = { viewModel.resume(selectedRow.shareId) },
+            onLeave = {
+                viewModel.leave(selectedRow.shareId)
+                selectedShareId = null
+            },
+            contentPadding = contentPadding
+        )
+        return
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -118,7 +142,8 @@ fun SharesScreen(
                     row = row,
                     onPause = { viewModel.pause(row.shareId) },
                     onResume = { viewModel.resume(row.shareId) },
-                    onLeave = { viewModel.leave(row.shareId) }
+                    onLeave = { viewModel.leave(row.shareId) },
+                    onOpen = { selectedShareId = row.shareId.value }
                 )
             }
         }
@@ -134,7 +159,8 @@ fun SharesScreen(
                     onPause = { /* no-op */ },
                     onResume = { /* no-op */ },
                     onLeave = { /* no-op */ },
-                    readOnly = true
+                    readOnly = true,
+                    onOpen = { selectedShareId = row.shareId.value }
                 )
             }
         }
@@ -181,7 +207,7 @@ private fun PendingInvitationCard(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                stringResource(Res.string.shares_glyph_envelope) + " ${row.name}",
+                stringResource(Res.string.shares_glyph_envelope) + " " + "${row.name}",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )

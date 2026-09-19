@@ -1,7 +1,12 @@
 package com.kfilesync.mobile.infrastructure.network
 
+import com.kfilesync.mobile.application.dto.BlocksRequestDto
+import com.kfilesync.mobile.application.dto.BlocksResponseDto
 import com.kfilesync.mobile.application.dto.DeviceInfoDto
 import com.kfilesync.mobile.application.dto.ErrorDto
+import com.kfilesync.mobile.application.dto.RegisterRequestDto
+import com.kfilesync.mobile.application.dto.RegisterResponseDto
+import com.kfilesync.mobile.application.dto.ShareLeaveDto
 import com.kfilesync.mobile.application.dto.IndexResponseDto
 import com.kfilesync.mobile.application.dto.PairConfirmDto
 import com.kfilesync.mobile.application.dto.PairRequestDto
@@ -53,8 +58,8 @@ import kotlin.time.Instant
  * Embedded HTTP(S) server exposing the lansync v1 REST surface on the device.
  *
  * Phase 2 (T2.2 / T2.3) adds the transfer routes:
- * - `POST /transfer/request` - peer asks to send us files.
- * - `POST /transfer/chunks`  - peer streams chunks (one POST per chunk).
+ * - `POST /transfer/request` - peer asks to send us files,
+ * - `POST /transfer/chunks`  - peer streams chunks (one POST per chunk),
  * - `POST /transfer/cancel`  - peer aborts an in-flight job.
  *
  * Symmetric zero-trust wiring (T1.4) - see class history.
@@ -98,7 +103,7 @@ class HttpServer(
             return
         }
         val tlsLabel = if (tlsConfig != null) "https (sslConnector)" else "http (plaintext)"
-        Napier.i("starting HttpServer on $host:$port - $tlsLabel")
+        Napier.i("starting HttpServer on $host:$port -$tlsLabel")
 
         engine = startKtorEngine(tlsConfig, port, host) {
             install(ContentNegotiation) {
@@ -118,6 +123,7 @@ class HttpServer(
                 allowHeader(HEADER_DEVICE_ID)
                 allowHeader(HEADER_TIMESTAMP)
                 allowHeader(HEADER_NONCE)
+                allowHeader(HEADER_FINGERPRINT)
             }
 
             install(StatusPages) {
@@ -132,7 +138,6 @@ class HttpServer(
 
             routing {
                 route("/api/lansync/v1") {
-
                     // ---- Identity ----
                     get("/info") {
                         val identity = identityProvider.current()
@@ -157,7 +162,10 @@ class HttpServer(
                     post("/pair/request") {
                         val svc = pairingService
                         if (svc == null) {
-                            call.respond(HttpStatusCode.ServiceUnavailable, PairResultDto(ok = false, error = "pairing not configured"))
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                PairResultDto(requestId = "", accepted = false, reason = "pairing not configured")
+                            )
                             return@post
                         }
                         // Pairing routes are the bootstrap channel; the peer is by
@@ -166,13 +174,18 @@ class HttpServer(
                         if (!verifyAntiReplay(call, allowUnpairedPeer = true)) return@post
                         val body = call.receive<PairRequestDto>()
                         svc.receiveIncoming(body)
-                        call.respond(HttpStatusCode.Accepted, PairResultDto(ok = true))
+                        // Pending state per dto.rs: accepted=false, no cert/reason yet -
+                        // the real accept/reject happens on /pair/confirm.
+                        call.respond(HttpStatusCode.Accepted, PairResultDto(requestId = body.requestId, accepted = false))
                     }
 
                     post("/pair/confirm") {
                         val svc = pairingService
                         if (svc == null) {
-                            call.respond(HttpStatusCode.ServiceUnavailable, PairResultDto(ok = false, error = "pairing not configured"))
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                PairResultDto(requestId = "", accepted = false, reason = "pairing not configured")
+                            )
                             return@post
                         }
                         if (!verifyAntiReplay(call, allowUnpairedPeer = true)) return@post
@@ -181,14 +194,15 @@ class HttpServer(
                         if (outcome.result.isSuccess) {
                             call.respond(
                                 HttpStatusCode.OK,
-                                PairResultDto(ok = true, peerCertificatePem = outcome.ourCertPem)
+                                PairResultDto(requestId = body.requestId, accepted = true, peerCertificatePem = outcome.ourCertPem)
                             )
                         } else {
                             call.respond(
                                 HttpStatusCode.Forbidden,
                                 PairResultDto(
-                                    ok = false,
-                                    error = outcome.result.exceptionOrNull()?.message
+                                    requestId = body.requestId,
+                                    accepted = false,
+                                    reason = outcome.result.exceptionOrNull()?.message
                                 )
                             )
                         }
@@ -197,18 +211,24 @@ class HttpServer(
                     post("/pair/revoke") {
                         val svc = pairingService
                         if (svc == null) {
-                            call.respond(HttpStatusCode.ServiceUnavailable, PairResultDto(ok = false, error = "pairing not configured"))
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                ErrorDto(code = "pairing_not_configured", message = "pairing not configured")
+                            )
                             return@post
                         }
                         if (!verifyAntiReplay(call)) return@post
                         val body = call.receive<PairRevokeDto>()
                         val outcome = svc.revoke(DeviceId(body.deviceId))
                         if (outcome.isSuccess) {
-                            call.respond(HttpStatusCode.OK, PairResultDto(ok = true))
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "ok"))
                         } else {
                             call.respond(
                                 HttpStatusCode.NotFound,
-                                PairResultDto(ok = false, error = outcome.exceptionOrNull()?.message)
+                                ErrorDto(
+                                    code = "device_not_found",
+                                    message = outcome.exceptionOrNull()?.message ?: "device not found"
+                                )
                             )
                         }
                     }
@@ -233,16 +253,17 @@ class HttpServer(
                         val resp = svc.onTransferRequest(body)
                         call.respond(if (resp.accepted) HttpStatusCode.OK else HttpStatusCode.Forbidden, resp)
                     }
+
                     post("/transfer/chunks") {
                         val svc = transferService
                         if (svc == null) {
                             call.respond(
                                 HttpStatusCode.ServiceUnavailable,
                                 TransferChunkAckDto(
-                                    ok = false,
+                                    jobId = "",
                                     fileId = "",
                                     chunkIndex = -1,
-                                    error = "transfer service not configured"
+                                    verified = false
                                 )
                             )
                             return@post
@@ -250,8 +271,9 @@ class HttpServer(
                         if (!verifyAntiReplay(call)) return@post
                         val body = call.receive<TransferChunkDto>()
                         val ack = svc.onTransferChunk(body)
-                        call.respond(if (ack.ok) HttpStatusCode.OK else HttpStatusCode.BadRequest, ack)
+                        call.respond(if (ack.verified) HttpStatusCode.OK else HttpStatusCode.BadRequest, ack)
                     }
+
                     post("/transfer/cancel") {
                         val svc = transferService
                         if (svc == null) {
@@ -287,12 +309,12 @@ class HttpServer(
                                 HttpStatusCode.Forbidden,
                                 ShareResultDto(
                                     ok = false,
-                                    error = outcome.exceptionOrNull()?.message
-                                        ?: "share invite rejected"
+                                    error = outcome.exceptionOrNull()?.message ?: "share invite rejected"
                                 )
                             )
                         }
                     }
+
                     post("/share/authorize") {
                         val svc = shareService
                         if (svc == null) {
@@ -304,7 +326,12 @@ class HttpServer(
                         }
                         if (!verifyAntiReplay(call)) return@post
                         val body = call.receive<ShareAuthorizeDto>()
-                        val outcome = svc.onShareAuthorize(body)
+                        // Anti-replay already confirmed X-Device-Id belongs to a
+                        // paired peer; that peer is the invitee announcing its
+                        // accept/decline, so its identity comes from the header,
+                        // not the body (dto.rs: invitee -> creator).
+                        val fromDeviceId = DeviceId(call.request.headers[HEADER_DEVICE_ID].orEmpty())
+                        val outcome = svc.onShareAuthorize(body, fromDeviceId)
                         if (outcome.isSuccess) {
                             call.respond(HttpStatusCode.OK, ShareResultDto(ok = true))
                         } else {
@@ -317,45 +344,112 @@ class HttpServer(
                             )
                         }
                     }
-                }
 
-                // ---- Sync (T4.5) ----
-                get("/sync/index") {
-                    val indexRepo = fileIndexRepository
-                    val shareRepo = shareRepository
-                    if (indexRepo == null || shareRepo == null) {
+                    // ---- Sync (T4.5) ----
+                    // NOTE: registered under the full versioned path so it matches
+                    // the client (LanSyncHttpClient.getSyncIndex) and the desktop
+                    // lansync v1 contract (§7.3). Previously this was mistakenly
+                    // mounted at root "/sync/index", which 404'd every index fetch.
+                    get("/api/lansync/v1/sync/index") {
+                        val indexRepo = fileIndexRepository
+                        val shareRepo = shareRepository
+                        if (indexRepo == null || shareRepo == null) {
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                ErrorDto(code = "sync_disabled", message = "sync service not configured")
+                            )
+                            return@get
+                        }
+                        val shareIdParam = call.request.queryParameters["share_id"]
+                        if (shareIdParam.isNullOrBlank()) {
+                            call.respond(
+                                HttpStatusCode.BadRequest,
+                                ErrorDto(code = "bad_request", message = "share_id required")
+                            )
+                            return@get
+                        }
+                        val shareId = ShareId(shareIdParam)
+                        val share = shareRepo.findById(shareId)
+                        if (share == null || share.status != ShareStatus.Active) {
+                            // Don't leak existence of shares we declined to join.
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                ErrorDto(code = "share_not_active", message = "share not active")
+                            )
+                            return@get
+                        }
+
+                        // Index for the peer = live entries + recent tombstones (so they
+                        // can pick up deletions). The 30-day window is the same cleanup
+                        // threshold used by TombstoneCleanupService.
+                        val live = indexRepo.getIndex(shareId)
+                        val tombstones = indexRepo.getTombstones(shareId)
+                        val entries = (live + tombstones).map { it.toDto() }
                         call.respond(
-                            HttpStatusCode.ServiceUnavailable,
-                            ErrorDto(code = "sync_disabled", message = "sync service not configured")
+                            IndexResponseDto(
+                                shareId = shareIdParam,
+                                // No monotonic per-share index versioning exists yet;
+                                // a wall-clock stamp is a safe placeholder since it
+                                // never falsely signals "nothing changed".
+                                indexVersion = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                                entries = entries
+                            )
                         )
-                        return@get
-                    }
-                    val shareIdParam = call.request.queryParameters["share_id"]
-                    if (shareIdParam.isNullOrBlank()) {
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            ErrorDto(code = "bad_request", message = "share_id required")
-                        )
-                        return@get
-                    }
-                    val shareId = ShareId(shareIdParam)
-                    val share = shareRepo.findById(shareId)
-                    if (share == null || share.status != ShareStatus.Active) {
-                        // Don't leak existence of shares we declined to join.
-                        call.respond(
-                            HttpStatusCode.NotFound,
-                            ErrorDto(code = "share_not_active", message = "share not active")
-                        )
-                        return@get
                     }
 
-                    // Index for the peer = live entries + recent tombstones (so they
-                    // can pick up deletions). The 30-day window is the same cleanup
-                    // threshold used by TombstoneCleanupService.
-                    val live = indexRepo.getIndex(shareId)
-                    val tombstones = indexRepo.getTombstones(shareId)
-                    val entries = (live + tombstones).map { it.toDto() }
-                    call.respond(IndexResponseDto(shareId = shareIdParam, entries = entries))
+                    // ---- Discovery registration (§7.3) ----
+                    post("/api/lansync/v1/register") {
+                        // Registration is a discovery-time announce; the peer may not
+                        // be paired yet, so allow unpaired (the PIN ceremony is the
+                        // real trust authenticator, not /register).
+                        if (!verifyAntiReplay(call, allowUnpairedPeer = true)) return@post
+                        val body = call.receive<RegisterRequestDto>()
+                        // Only refresh state for devices we already trust; an unpaired
+                        // peer gets an ack but cannot write rows into our DB.
+                        val repo = deviceRepository
+                        if (repo != null) {
+                            val known = repo.findById(DeviceId(body.deviceId))
+                            if (known != null && known.state is com.kfilesync.mobile.domain.model.DeviceState.Paired) {
+                                runCatching { repo.updateLastSeen(known.id, kotlin.time.Clock.System.now(), null) }
+                            }
+                        }
+                        call.respond(HttpStatusCode.OK, RegisterResponseDto(accepted = true))
+                    }
+
+                    // ---- Share leave (notify creator) ----
+                    post("/api/lansync/v1/share/leave") {
+                        val svc = shareService
+                        if (svc == null) {
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                ShareResultDto(ok = false, error = "share service not configured")
+                            )
+                            return@post
+                        }
+                        if (!verifyAntiReplay(call)) return@post
+                        val body = call.receive<ShareLeaveDto>()
+                        val outcome = svc.onShareLeave(body)
+                        if (outcome.isSuccess) {
+                            call.respond(HttpStatusCode.OK, ShareResultDto(ok = true))
+                        } else {
+                            call.respond(
+                                HttpStatusCode.Forbidden,
+                                ShareResultDto(ok = false, error = outcome.exceptionOrNull()?.message ?: "share leave rejected")
+                            )
+                        }
+                    }
+
+                    // ---- Sync blocks (§7.3) ----
+                    // The block data-plane is carried over /transfer/chunks (Phase 4
+                    // decision; see design §7.3 note). This route returns a well-formed
+                    // empty answer so a strict desktop peer doesn't 404; content-defined
+                    // chunk dedup remains a post-MVP item (§1.3 non-goal).
+                    post("/api/lansync/v1/sync/blocks") {
+                        if (!verifyAntiReplay(call)) return@post
+                        val body = call.receive<BlocksRequestDto>()
+                        Napier.i("/sync/blocks for ${body.shareId} (${body.paths.size} paths) - served via transfer pipeline")
+                        call.respond(HttpStatusCode.OK, BlocksResponseDto(blocks = emptyMap()))
+                    }
                 }
             }
         }
@@ -367,7 +461,7 @@ class HttpServer(
      *
      * Hardened against issue #11. The previous implementation keyed the
      * NonceWindow bucket on the client-supplied `X-Device-Id` header alone
-     * – an attacker who got past TLS pinning could supply any deviceId and
+     * - an attacker who got past TLS pinning could supply any deviceId and
      * either poison another peer's bucket or replay traffic under a fresh
      * id. We add two checks on top of the freshness window:
      *
@@ -379,7 +473,7 @@ class HttpServer(
      * MUST match the cert we have on file. Without mTLS we can't tie
      * the request to the TLS handshake post-hoc, but requiring the
      * header to match raises the bar from "any string" to "must know
-     * the peer's cert fingerprint" – a value only a paired peer or a
+     * the peer's cert fingerprint" - a value only a paired peer or a
      * successful MITM could plausibly produce.
      *
      * Tests that need the legacy permissive behaviour set
@@ -389,19 +483,19 @@ class HttpServer(
         val window = nonceWindow
         if (window == null) {
             if (allowMissingNonceWindow) {
-                // Legacy / test wiring – explicit opt-in.
+                // Legacy / test wiring - explicit opt-in.
                 return true
             }
             Napier.e(
-                "HttpServer: anti-replay window not configured – rejecting mutating request. " +
-                        "Construct the server with a NonceWindow or set allowMissingNonceWindow = true " +
-                        "if this is a test."
+                "HttpServer: anti-replay window not configured - rejecting mutating request. " +
+                    "Construct the server with a NonceWindow or set allowMissingNonceWindow = true " +
+                    "if this is a test."
             )
             call.respond(
                 HttpStatusCode.InternalServerError,
                 ErrorDto(
                     code = "anti_replay_misconfigured",
-                    message = "server is misconfigured: anti-replay protection is required"
+                    message = "server is misconfigured; anti-replay protection is required"
                 )
             )
             return false
@@ -483,7 +577,7 @@ class HttpServer(
         return when (verdict) {
             is NonceWindow.Verdict.Accepted -> true
             is NonceWindow.Verdict.Rejected -> {
-                Napier.w("HttpServer: anti-replay rejected from ${deviceId.take(12)}: ${verdict.reason}")
+                Napier.w("HttpServer: anti-replay rejected from ${deviceId.take(12)}:${verdict.reason}")
                 call.respond(
                     HttpStatusCode.Unauthorized,
                     ErrorDto(code = "anti_replay", message = verdict.reason)

@@ -1,6 +1,7 @@
 package com.kfilesync.mobile.application.handler
 
 import com.kfilesync.mobile.application.dto.ShareAuthorizeDto
+import com.kfilesync.mobile.application.dto.ShareLeaveDto
 import com.kfilesync.mobile.application.identity.LocalIdentityProvider
 import com.kfilesync.mobile.domain.event.ShareAccepted
 import com.kfilesync.mobile.domain.event.ShareLeft
@@ -15,6 +16,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /**
  * Cross-cutting handler for cascade effects when an aggregate changes state.
@@ -23,8 +26,8 @@ import kotlinx.coroutines.launch
  * Phase 3 (T3.3) fills in the share-side cascade:
  *
  * - `TrustRevoked(deviceId)` -> drop every membership row for that device,
- * and *leave* every share that we joined because of an invitation from
- * that device (we no longer have a way to authenticate the creator).
+ *   and *leave* every share that we joined because of an invitation from
+ *   that device (we no longer have a way to authenticate the creator).
  *
  * Phase 4 will add the sync-cascade body (orphan tombstones, etc.).
  *
@@ -38,7 +41,8 @@ class CascadeHandler(
     private val httpClient: LanSyncHttpClient,
     private val localIdentityProvider: LocalIdentityProvider,
     private val eventBus: EventBus,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val clock: () -> Instant = { Clock.System.now() }
 ) {
 
     fun register(eventBus: EventBus) {
@@ -53,7 +57,15 @@ class CascadeHandler(
             scope.launch { notifyCreatorOfAcceptance(event) }
         }
 
-        Napier.d("CascadeHandler registered (TrustRevoked + ShareAccepted)")
+        // When the local user leaves a share, tell the creator via /share/leave
+        // so they drop our membership row. Inbound /share/leave is handled by
+        // ShareServiceImpl.onShareLeave, which deliberately does NOT re-publish
+        // ShareLeft - that prevents a notify ping-pong between the two peers.
+        eventBus.subscribe(ShareLeft::class) { event ->
+            scope.launch { notifyCreatorOfLeave(event) }
+        }
+
+        Napier.d("CascadeHandler registered (TrustRevoked + ShareAccepted + ShareLeft)")
     }
 
     /**
@@ -67,20 +79,47 @@ class CascadeHandler(
             val creator = deviceRepository.findById(share.createdBy) ?: return@runCatching
             val addr = creator.addresses.firstOrNull() ?: return@runCatching
             val baseUrl = "https://${addr.host}:${addr.port}"
-            val local = localIdentityProvider.current()
             httpClient.postShareAuthorize(
                 baseUrl = baseUrl,
                 body = ShareAuthorizeDto(
                     shareId = event.shareId.value,
-                    deviceId = local.deviceId.value,
-                    authorizedBy = share.createdBy.value,
-                    permission = share.permission.toWire()
+                    accepted = true
                 )
             )
-
             Napier.i("posted /share/authorize for ${event.shareId.value} to ${creator.alias}")
         }.onFailure {
             Napier.w("share/authorize cascade failed for ${event.shareId.value}: ${it.message}")
+        }
+    }
+
+    /**
+     * Tell the share creator we left by POSTing '/share/leave'. Guarded to skip
+     * three cases where the notification is impossible or meaningless:
+     * - the share row is already gone (declining an invitation deletes it),
+     * - we ARE the creator (no upstream to notify),
+     * - the creator is no longer a Paired peer (trust-revocation cascade also
+     *   publishes ShareLeft, but we can't and shouldn't reach a revoked peer).
+     */
+    private suspend fun notifyCreatorOfLeave(event: ShareLeft) {
+        runCatching {
+            val share = shareRepository.findById(event.shareId) ?: return@runCatching
+            val local = localIdentityProvider.current()
+            if (share.createdBy == local.deviceId) return@runCatching
+            val creator = deviceRepository.findById(share.createdBy) ?: return@runCatching
+            if (creator.state !is com.kfilesync.mobile.domain.model.DeviceState.Paired) return@runCatching
+            val addr = creator.addresses.firstOrNull() ?: return@runCatching
+            val baseUrl = "https://${addr.host}:${addr.port}"
+            httpClient.postShareLeave(
+                baseUrl = baseUrl,
+                body = ShareLeaveDto(
+                    shareId = event.shareId.value,
+                    deviceId = local.deviceId.value,
+                    leftAtMs = clock().toEpochMilliseconds()
+                )
+            )
+            Napier.i("posted /share/leave for ${event.shareId.value} to ${creator.alias}")
+        }.onFailure {
+            Napier.w("share/leave cascade failed for ${event.shareId.value}: ${it.message}")
         }
     }
 

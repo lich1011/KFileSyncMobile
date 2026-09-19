@@ -3,6 +3,7 @@ package com.kfilesync.mobile.infrastructure.persistence
 import com.kfilesync.mobile.db.KFileSyncDatabase
 import com.kfilesync.mobile.db.Pairing_requests
 import com.kfilesync.mobile.domain.model.DeviceId
+import com.kfilesync.mobile.domain.model.DevicePlatform
 import com.kfilesync.mobile.domain.model.Fingerprint
 import com.kfilesync.mobile.domain.model.Nonce
 import com.kfilesync.mobile.domain.model.PairingCode
@@ -41,7 +42,9 @@ class SqlDelightPairingRequestRepo(
             nonce = session.nonce.value,
             attempts_remaining = session.attemptsRemaining.toLong(),
             created_at = session.createdAt.toEpochMilliseconds(),
-            expires_at = session.expiry.expiresAt.toEpochMilliseconds()
+            expires_at = session.expiry.expiresAt.toEpochMilliseconds(),
+            peer_alias = session.peerAlias,
+            peer_platform = session.peerPlatform.toWire()
         ).value
     }
 
@@ -70,6 +73,8 @@ class SqlDelightPairingRequestRepo(
         pin = PairingCode(pin),
         nonce = Nonce(nonce),
         peerFingerprint = Fingerprint(peer_fingerprint),
+        peerAlias = peer_alias,
+        peerPlatform = DevicePlatform.fromWire(peer_platform),
         expiry = SessionExpiry(Instant.fromEpochMilliseconds(expires_at)),
         attemptsRemaining = attempts_remaining.toInt(),
         status = statusFromWire(status),

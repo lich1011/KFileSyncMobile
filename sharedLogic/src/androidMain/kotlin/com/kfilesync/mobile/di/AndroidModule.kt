@@ -18,6 +18,7 @@ import com.kfilesync.mobile.domain.port.FileSource
 import com.kfilesync.mobile.domain.port.FileWatcher
 import com.kfilesync.mobile.domain.port.KeyStore
 import com.kfilesync.mobile.domain.port.NetworkMonitor
+import com.kfilesync.mobile.infrastructure.network.AntiReplayHeaderProvider
 import com.kfilesync.mobile.infrastructure.network.HttpServer
 import com.kfilesync.mobile.infrastructure.network.HttpServerTlsConfig
 import com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient
@@ -124,10 +125,11 @@ val androidModule = module {
         )
     }
 
-    // ---- HTTP client (pinned OkHttp engine) ----
+    // ---- HTTP client (pinned OkHttp engine + anti-reply signer) ----
     single {
         LanSyncHttpClient(
-            engineFactory = pinnedHttpClientEngine(pinned = get())
+            engineFactory = pinnedHttpClientEngine(pinned = get()),
+            antiReplay = AntiReplayHeaderProvider(localIdentityProvider = get())
         )
     }
 }
