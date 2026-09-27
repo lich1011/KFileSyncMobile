@@ -42,7 +42,7 @@ data class TransferProgress(
     val completedFiles: Int,
     val totalFiles: Int
 ) {
-    /** Ratio in `[0.0, 1.0]`. Zero-byte transfers report 1.0 when [completedFiles] == [totalFiles]. */
+    /** Ratio in `[0.0, 1.0]`, Zero-byte transfers report 1.0 when [completedFiles] == [totalFiles]. */
     val ratio: Float
         get() = when {
             totalBytes > 0L -> (transferredBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
@@ -51,7 +51,7 @@ data class TransferProgress(
         }
 }
 
-/** Per-file resume checkpoint. `chunksDone` is the count of contiguous-from-zero verified chunks. */
+/** Per-file resume checkpoint, `chunksDone` is the count of contiguous-from-zero verified chunks. */
 data class Checkpoint(val chunksDone: Int) {
     init { require(chunksDone >= 0) { "chunksDone must be >= 0, got $chunksDone" } }
 }
@@ -99,11 +99,11 @@ data class TransferItem(
  * Invariants:
  * - At least one item; every item has at least one chunk.
  * - State transitions follow [TransferState]'s legal graph; illegal
- * transitions return `Result.failure(DomainError.InvalidStateTransition)`.
+ *   transitions return `Result.failure(DomainError.InvalidStateTransition)`.
  * - `items.size == totalFiles` and `sum(items.size) == totalBytes` -
- * guarded by [requireConsistency].
+ *   guarded by [requireConsistency].
  *
- * Pure data + pure methods. Persistence is the repository's concern.
+ * Pure data + pure methods, Persistence is the repository's concern.
  */
 data class TransferJob(
     val id: JobId,
@@ -116,7 +116,15 @@ data class TransferJob(
     val state: TransferState = TransferState.Pending,
     val createdAt: Instant,
     val updatedAt: Instant = createdAt,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** Set when entering [TransferState.Active]; carried through [TransferState.Paused]. */
+    val startedAt: Instant? = null,
+    /** Aggregate chunks-done snapshot, valid while [state] is [TransferState.Active] or [TransferState.Paused]. */
+    val chunksDone: Int? = null,
+    /** Set when entering [TransferState.Completed]. */
+    val completedAt: Instant? = null,
+    /** Retry count, set alongside [errorMessage] when entering [TransferState.Failed]. */
+    val retries: Int = 0
 ) {
     init {
         require(items.isNotEmpty()) { "TransferJob must contain at least one item" }
@@ -134,45 +142,55 @@ data class TransferJob(
         totalFiles = totalFiles
     )
 
+    /** Sender-side: request sent, awaiting the peer's `TransferAcceptDto`. */
+    fun requestSent(now: Instant): Result<TransferJob> = when (state) {
+        TransferState.Pending -> Result.success(copy(state = TransferState.Requested, updatedAt = now))
+        else -> Result.failure(DomainError.InvalidStateTransition("cannot mark requested from $state"))
+    }
+
     /** Legal state transitions; see [TransferState] for the graph. */
     fun start(now: Instant): Result<TransferJob> = when (state) {
         TransferState.Pending,
-        is TransferState.Paused -> Result.success(
-            copy(state = TransferState.Active(startedAt = now, chunksDone = transferredChunks()), updatedAt = now)
+        TransferState.Requested,
+        TransferState.Paused -> Result.success(
+            copy(state = TransferState.Active, startedAt = now, chunksDone = transferredChunks(), updatedAt = now)
         )
         else -> Result.failure(DomainError.InvalidStateTransition("cannot start from $state"))
     }
 
     fun pause(now: Instant): Result<TransferJob> = when (state) {
-        is TransferState.Active -> Result.success(
-            copy(state = TransferState.Paused(Checkpoint(state.chunksDone)), updatedAt = now)
+        TransferState.Active -> Result.success(
+            copy(state = TransferState.Paused, chunksDone = transferredChunks(), updatedAt = now)
         )
         else -> Result.failure(DomainError.InvalidStateTransition("cannot pause from $state"))
     }
 
     fun cancel(now: Instant): Result<TransferJob> = when (state) {
         TransferState.Pending,
-        is TransferState.Active,
-        is TransferState.Paused -> Result.success(copy(state = TransferState.Cancelled, updatedAt = now))
+        TransferState.Requested,
+        TransferState.Active,
+        TransferState.Paused -> Result.success(copy(state = TransferState.Cancelled, updatedAt = now))
         else -> Result.failure(DomainError.InvalidStateTransition("cannot cancel from $state"))
     }
 
     fun beginVerifying(now: Instant): Result<TransferJob> = when (state) {
-        is TransferState.Active -> Result.success(copy(state = TransferState.Verifying, updatedAt = now))
+        TransferState.Active -> Result.success(copy(state = TransferState.Verifying, updatedAt = now))
         else -> Result.failure(DomainError.InvalidStateTransition("cannot verify from $state"))
     }
 
     fun complete(now: Instant): Result<TransferJob> = when (state) {
-        TransferState.Verifying -> Result.success(copy(state = TransferState.Completed(now), updatedAt = now))
+        TransferState.Verifying -> Result.success(
+            copy(state = TransferState.Completed, completedAt = now, updatedAt = now)
+        )
         else -> Result.failure(DomainError.InvalidStateTransition("cannot complete from $state"))
     }
 
     fun fail(reason: String, now: Instant, retries: Int = 0): Result<TransferJob> {
-        if (state is TransferState.Completed || state is TransferState.Cancelled) {
+        if (state == TransferState.Completed || state == TransferState.Cancelled) {
             return Result.failure(DomainError.InvalidStateTransition("cannot fail from $state"))
         }
         return Result.success(
-            copy(state = TransferState.Failed(reason, retries), errorMessage = reason, updatedAt = now)
+            copy(state = TransferState.Failed, errorMessage = reason, retries = retries, updatedAt = now)
         )
     }
 
@@ -239,7 +257,7 @@ data class TransferJob(
                     ((plan.size + chunkSize - 1) / chunkSize).toInt().coerceAtLeast(1)
                 require(plan.chunkHashes.size == totalChunks) {
                     "File ${plan.path}: chunk hash count (${plan.chunkHashes.size}) " +
-                            "does not match computed totalChunks ($totalChunks) for size=${plan.size}, chunkSize=$chunkSize"
+                        "does not match computed totalChunks ($totalChunks) for size=${plan.size}, chunkSize=$chunkSize"
                 }
                 TransferItem(
                     fileId = plan.fileId ?: FileId("$idx:${plan.path}"),

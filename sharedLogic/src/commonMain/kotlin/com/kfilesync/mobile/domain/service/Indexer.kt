@@ -1,5 +1,6 @@
 package com.kfilesync.mobile.domain.service
 
+import com.kfilesync.mobile.domain.model.BlockInfo
 import com.kfilesync.mobile.domain.model.ContentHash
 import com.kfilesync.mobile.domain.model.DeviceId
 import com.kfilesync.mobile.domain.model.EntryType
@@ -207,14 +208,14 @@ class Indexer(
                 me = me,
                 size = 0L,
                 sha256 = ContentHash("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-                blocks = listOf(emptyChunkBlake3Hex()),
+                blocks = listOf(BlockInfo(index = 0, size = 0, hash = emptyChunkBlake3Hex())),
                 entryType = EntryType.File,
                 now = now
             )
         }
 
         val sha = hashPort.newSha256()
-        val blocks = mutableListOf<String>()
+        val blocks = mutableListOf<BlockInfo>()
         val buf = ByteArray(rehashChunkSize)
         val chunkHasher = hashPort.newBlake3()
         var read = 0L
@@ -227,7 +228,7 @@ class Indexer(
                 sha.update(buf, 0, n)
                 chunkHasher.reset()
                 chunkHasher.update(buf, 0, n)
-                blocks += chunkHasher.hexLower()
+                blocks += listOf(BlockInfo(index = chunkIndex, size = n, hash = chunkHasher.hexLower()))
                 read += n.toLong()
                 chunkIndex += 1
             }

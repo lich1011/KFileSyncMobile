@@ -47,7 +47,7 @@ CREATE INDEX idx_transfer_jobs_status ON transfer_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_transfer_jobs_updated ON transfer_jobs(updated_at DESC);
 
 findIncomplete:
-SELECT * FROM transfer_jobs WHERE status IN ('pending', 'active', 'paused');
+SELECT * FROM transfer_jobs WHERE status IN ('pending', 'requested', 'active', 'paused');
 
 findById:
 SELECT * FROM transfer_jobs WHERE job_id = ?;

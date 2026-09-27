@@ -55,4 +55,24 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(layout.buildDirectory.dir("intermediates/sharedUI_compose_resources"))
+        }
+    }
+}
+
+val copySharedUIComposeResourcesToAppAssets by tasks.registering(Sync::class) {
+    val sharedUIProject = project(":sharedUI")
+    dependsOn(sharedUIProject.tasks.matching { it.name.startsWith("prepareComposeResourcesTaskFor") })
+
+    into(layout.buildDirectory.dir("intermediates/sharedUI_compose_resources/composeResources/kfilesyncmobile.sharedui.generated.resources"))
+
+    from(sharedUIProject.layout.buildDirectory.dir("generated/compose/resourceGenerator/preparedResources/commonMain/composeResources"))
+    from(sharedUIProject.layout.buildDirectory.dir("generated/compose/resourceGenerator/preparedResources/androidMain/composeResources"))
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(copySharedUIComposeResourcesToAppAssets)
 }

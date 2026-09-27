@@ -31,3 +31,4 @@ dependencyResolutionManagement {
 include(":androidApp")
 include(":sharedLogic")
 include(":sharedUI")
+include(":kfilesync-core-bindings")

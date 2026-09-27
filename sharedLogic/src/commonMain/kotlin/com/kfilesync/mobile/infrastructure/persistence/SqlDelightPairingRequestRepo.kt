@@ -40,7 +40,8 @@ class SqlDelightPairingRequestRepo(
             pin = session.pin.digits,
             peer_fingerprint = session.peerFingerprint.hex,
             nonce = session.nonce.value,
-            attempts_remaining = session.attemptsRemaining.toLong(),
+            attempts = session.attempts.toLong(),
+            max_attempts = session.maxAttempts.toLong(),
             created_at = session.createdAt.toEpochMilliseconds(),
             expires_at = session.expiry.expiresAt.toEpochMilliseconds(),
             peer_alias = session.peerAlias,
@@ -76,7 +77,8 @@ class SqlDelightPairingRequestRepo(
         peerAlias = peer_alias,
         peerPlatform = DevicePlatform.fromWire(peer_platform),
         expiry = SessionExpiry(Instant.fromEpochMilliseconds(expires_at)),
-        attemptsRemaining = attempts_remaining.toInt(),
+        attempts = attempts.toInt(),
+        maxAttempts = max_attempts.toInt(),
         status = statusFromWire(status),
         createdAt = Instant.fromEpochMilliseconds(created_at)
     )

@@ -63,8 +63,8 @@ class PinnedTrustSnapshot(
         val fps = runCatching {
             deviceRepository.findPaired()
                 .mapNotNull { device ->
-                    (device.state as? DeviceState.Paired)?.let {
-                        fingerprintOf(it.certificatePem)
+                    device.certificatePem?.takeIf{ device.state == DeviceState.Paired}?.let {
+                        fingerprintOf(it)
                     }
                 }
                 .toSet()

@@ -38,6 +38,8 @@ data class VersionVector(val entries: Map<DeviceId, Long> = emptyMap()) {
 
 data class BlockLocation(val shareId: ShareId, val path: String, val offset: Long, val size: Int)
 
+data class BlockInfo(val index: Int, val size: Int, val hash: String)
+
 @kotlin.jvm.JvmInline
 value class ContentHash(val sha256Hex: String)
 
@@ -70,7 +72,7 @@ data class FileEntry(
     val modifiedBy: DeviceId? = null,
     val versionVector: VersionVector = VersionVector(),
     val sha256: ContentHash? = null,
-    val blocks: List<String> = emptyList(), // BLAKE3 hex list (per-chunk)
+    val blocks: List<BlockInfo> = emptyList(), // BLAKE3 hex list (per-chunk)
     val deleted: Boolean = false,
     val deletedAt: Instant? = null,
     val updatedAt: Instant
@@ -81,7 +83,7 @@ data class FileEntry(
         me: DeviceId,
         newSize: Long,
         newSha256: ContentHash?,
-        newBlocks: List<String>,
+        newBlocks: List<BlockInfo>,
         now: Instant = Clock.System.now()
     ): FileEntry = copy(
         size = newSize,
@@ -134,7 +136,7 @@ data class FileEntry(
             me: DeviceId,
             size: Long,
             sha256: ContentHash?,
-            blocks: List<String>,
+            blocks: List<BlockInfo>,
             entryType: EntryType = EntryType.File,
             now: Instant = Clock.System.now()
         ): FileEntry = FileEntry(

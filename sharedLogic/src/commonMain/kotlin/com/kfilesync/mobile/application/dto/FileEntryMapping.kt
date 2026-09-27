@@ -1,5 +1,6 @@
 package com.kfilesync.mobile.application.dto
 
+import com.kfilesync.mobile.domain.model.BlockInfo
 import com.kfilesync.mobile.domain.model.ContentHash
 import com.kfilesync.mobile.domain.model.DeviceId
 import com.kfilesync.mobile.domain.model.EntryType
@@ -28,10 +29,8 @@ fun FileEntry.toDto(): FileEntryDto = FileEntryDto(
     modifiedBy = modifiedBy?.value.orEmpty(),
     versionVector = versionVector.entries.mapKeys { it.key.value },
     sha256 = sha256?.sha256Hex,
-    // FileEntry.blocks is a bare BLAKE3-hex list; block size isn't tracked
-    // domain-side (dead field in production - see FileEntry.blocks), so we
-    // report 0 rather than inventing a chunking strategy here.
-    blocks = blocks.mapIndexed { index, hash -> BlockInfoDto(index = index, size = 0, hash = hash) },
+    
+    blocks = blocks.map { BlockInfoDto(index = it.index, size = it.size, hash = it.hash) },
     deleted = deleted,
     deletedAtMs = deletedAt?.toEpochMilliseconds()
 )
@@ -45,7 +44,7 @@ fun FileEntryDto.toDomain(shareId: ShareId, updatedAt: Instant): FileEntry = Fil
     modifiedBy = modifiedBy.takeIf { it.isNotBlank() }?.let { DeviceId(it) },
     versionVector = VersionVector(versionVector.mapKeys { DeviceId(it.key) }),
     sha256 = sha256?.let { ContentHash(it) },
-    blocks = blocks.map { it.hash },
+    blocks = blocks.map { BlockInfo(index = it.index, size = it.size, hash = it.hash) },
     deleted = deleted,
     deletedAt = deletedAtMs?.let { Instant.fromEpochMilliseconds(it) },
     updatedAt = updatedAt

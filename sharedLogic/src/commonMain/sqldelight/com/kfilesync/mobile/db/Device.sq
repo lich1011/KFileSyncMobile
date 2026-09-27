@@ -9,7 +9,10 @@ CREATE TABLE devices (
     certificate_pem TEXT NOT NULL,
     trust_status    TEXT NOT NULL DEFAULT 'discovered',
     addresses       TEXT,
+    discovered_at   INTEGER,
     paired_at       INTEGER,
+    revoked_at      INTEGER,
+    revoked_reason  TEXT,
     last_seen_at    INTEGER,
     created_at      INTEGER NOT NULL
 );
@@ -26,8 +29,8 @@ findAll:
 SELECT * FROM devices WHERE trust_status != 'revoked';
 
 insert:
-INSERT OR REPLACE INTO devices(device_id, alias, platform, device_type, certificate_pem, trust_status, addresses, paired_at, last_seen_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO devices(device_id, alias, platform, device_type, certificate_pem, trust_status, addresses, discovered_at, paired_at, revoked_at, revoked_reason, last_seen_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateTrustStatus:
 UPDATE devices SET trust_status = ?, paired_at = ? WHERE device_id = ?;

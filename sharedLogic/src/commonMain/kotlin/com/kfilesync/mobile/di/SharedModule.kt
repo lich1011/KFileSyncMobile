@@ -37,7 +37,7 @@ import com.kfilesync.mobile.domain.service.IgnoreSpec
 import com.kfilesync.mobile.domain.service.Indexer
 import com.kfilesync.mobile.domain.port.HashPort
 import com.kfilesync.mobile.infrastructure.crypto.DefaultHashPort
-import com.kfilesync.mobile.domain.service.NonceWindow
+import com.kfilesync.mobile.domain.service.AntiReplayGuard
 import com.kfilesync.mobile.domain.service.PolicyEnforcer
 import com.kfilesync.mobile.domain.service.SizeBasedChunking
 import com.kfilesync.mobile.domain.service.SyncPlanGenerator
@@ -66,7 +66,7 @@ import org.koin.dsl.module
  * Phase 5 adds:
  * - 'SyncPolicy' (default; user picks via Settings tab)
  * - 'SyncPolicyProvider' (reads persisted policy id from 'config')
- * - 'NonceWindow' (anti-replay)
+ * - 'AntiReplayGuard' (anti-replay + pairing-trust)
  * - 'CrashRecoveryService' (boot-time recovery)
  * - 'NetworkAwarenessService' (auto-pause/resume)
  * - 'StorageMaintenanceService' (cache + temp cleanup)
@@ -99,7 +99,7 @@ val sharedModule = module {
     factory<ChunkingStrategy> { SizeBasedChunking() }
     single<SyncPolicy> { DefaultSyncPolicy() }
     single<HashPort> { DefaultHashPort() }
-    single { NonceWindow() }
+    single { AntiReplayGuard() }
 
     // ---- Application handlers ----
     single { SecurityHandler(deviceRepository = get(), keyStore = get(), trustBootstrapState = get(), transferService = get()) }

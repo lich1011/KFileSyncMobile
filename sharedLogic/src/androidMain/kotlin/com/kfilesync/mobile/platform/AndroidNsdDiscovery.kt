@@ -3,6 +3,7 @@ package com.kfilesync.mobile.platform
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import com.kfilesync.mobile.domain.model.DeviceAddress
 import com.kfilesync.mobile.domain.model.DeviceId
 import com.kfilesync.mobile.domain.model.DevicePlatform
@@ -45,15 +46,28 @@ class AndroidNsdDiscovery(
         context.getSystemService(Context.NSD_SERVICE) as NsdManager
     }
 
+    private val wifiManager: WifiManager by lazy {
+        context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    }
+
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private val running = AtomicBoolean(false)
+
+    // mDNS queries/responses travel as multicast UDP; many WiFi chipsets/OEM
+    // drivers silently drop incoming multicast packets unless the app holds
+    // this lock while announcing/discovering. Reference-counted so announce()
+    // and listen() can each acquire independently without double-releasing.
+    private val multicastLock: WifiManager.MulticastLock by lazy {
+        wifiManager.createMulticastLock("kfilesync-nsd").apply { setReferenceCounted(true) }
+    }
 
     override suspend fun announce(info: DeviceInfo): Unit = withContext(Dispatchers.Default) {
         if (registrationListener != null) {
             Napier.w("AndroidNsdDiscovery.announce called twice; ignoring")
             return@withContext
         }
+
         val service = NsdServiceInfo().apply {
             serviceName = info.alias.ifBlank { "kfilesync" }
             serviceType = SERVICE_TYPE
@@ -86,6 +100,8 @@ class AndroidNsdDiscovery(
         }
 
         registrationListener = listener
+        runCatching { multicastLock.acquire() }
+            .onFailure { Napier.w("multicastLock.acquire (announce) failed: ${it.message}") }
         nsd.registerService(service, NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
@@ -94,6 +110,7 @@ class AndroidNsdDiscovery(
             Napier.w("AndroidNsdDiscovery.listen called while already running")
             return@withContext
         }
+
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {
                 Napier.i("nsd discovery started for $serviceType")
@@ -123,13 +140,15 @@ class AndroidNsdDiscovery(
         }
 
         discoveryListener = listener
+        runCatching { multicastLock.acquire() }
+            .onFailure { Napier.w("multicastLock.acquire (listen) failed: ${it.message}") }
         nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
     private fun resolveAndEmit(found: NsdServiceInfo, onDiscovered: (DiscoveredDevice) -> Unit) {
         val resolveListener = object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Napier.w("nsd resolve failed code=$errorCode for ${serviceInfo.serviceName}")
+                Napier.w("nsd resolve failed code=$errorCode for${serviceInfo.serviceName}")
             }
 
             override fun onServiceResolved(resolved: NsdServiceInfo) {
@@ -163,13 +182,22 @@ class AndroidNsdDiscovery(
             runCatching { nsd.unregisterService(it) }
                 .onFailure { Napier.w("unregisterService failed: ${it.message}") }
             registrationListener = null
+            releaseMulticastLock()
         }
         discoveryListener?.let {
             runCatching { nsd.stopServiceDiscovery(it) }
                 .onFailure { Napier.w("stopServiceDiscovery failed: ${it.message}") }
             discoveryListener = null
+            releaseMulticastLock()
         }
         running.set(false)
+    }
+
+    // Reference-counted: must release exactly once per acquire() in announce()/listen(),
+    // matched 1:1 above by the listener-was-non-null checks.
+    private fun releaseMulticastLock() {
+        runCatching { multicastLock.release() }
+            .onFailure { Napier.w("multicastLock.release failed: ${it.message}") }
     }
 
     companion object {

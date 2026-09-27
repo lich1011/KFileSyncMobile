@@ -80,12 +80,12 @@ fun TransferListItem(
                 TransferState.Verifying -> LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth()
                 )
-                is TransferState.Completed -> LinearProgressIndicator(
+                TransferState.Completed -> LinearProgressIndicator(
                     progress = { 1f },
                     modifier = Modifier.fillMaxWidth()
                 )
                 TransferState.Cancelled,
-                is TransferState.Failed -> { /* no progress bar; state line carries the message */ }
+                TransferState.Failed -> { /* no progress bar; state line carries the message */ }
                 else -> LinearProgressIndicator(
                     progress = { row.ratio },
                     modifier = Modifier.fillMaxWidth()
@@ -103,7 +103,7 @@ fun TransferListItem(
             if (!readOnly) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     when (row.state) {
-                        is TransferState.Active -> {
+                        TransferState.Active -> {
                             // Resume only works for incoming after restart; outgoing
                             // resume needs a re-pick (TransferServiceImpl returns
                             // PermissionDenied). We surface Pause for outgoing only.
@@ -112,11 +112,12 @@ fun TransferListItem(
                             }
                             TextButton(onClick = onCancel) { Text(stringResource(Res.string.transfers_action_cancel)) }
                         }
-                        is TransferState.Paused -> {
+                        TransferState.Paused -> {
                             OutlinedButton(onClick = onResume) { Text(stringResource(Res.string.transfers_action_resume)) }
                             TextButton(onClick = onCancel) { Text(stringResource(Res.string.transfers_action_cancel)) }
                         }
                         TransferState.Pending,
+                        TransferState.Requested,
                         TransferState.Verifying -> {
                             TextButton(onClick = onCancel) { Text(stringResource(Res.string.transfers_action_cancel)) }
                         }
@@ -150,19 +151,19 @@ private fun headerSubtitle(row: TransferRow): String {
 }
 
 @Composable
-private fun stateLine(row: TransferRow): String = when (val s = row.state) {
-    TransferState.Pending -> stringResource(Res.string.transfers_state_pending)
-    is TransferState.Active -> stringResource(Res.string.transfers_state_active)
-    is TransferState.Paused -> stringResource(Res.string.transfers_state_paused)
+private fun stateLine(row: TransferRow): String = when (row.state) {
+    TransferState.Pending, TransferState.Requested -> stringResource(Res.string.transfers_state_pending)
+    TransferState.Active -> stringResource(Res.string.transfers_state_active)
+    TransferState.Paused -> stringResource(Res.string.transfers_state_paused)
     TransferState.Verifying -> stringResource(Res.string.transfers_state_verifying)
-    is TransferState.Completed -> stringResource(Res.string.transfers_state_completed)
-    is TransferState.Failed -> stringResource(Res.string.transfers_state_failed, row.errorMessage ?: s.errorMessage)
+    TransferState.Completed -> stringResource(Res.string.transfers_state_completed)
+    TransferState.Failed -> stringResource(Res.string.transfers_state_failed, row.errorMessage ?: "")
     TransferState.Cancelled -> stringResource(Res.string.transfers_state_cancelled)
 }
 
 @Composable
 private fun stateLineColor(row: TransferRow) = when (row.state) {
-    is TransferState.Failed -> MaterialTheme.colorScheme.error
-    is TransferState.Completed -> MaterialTheme.colorScheme.primary
+    TransferState.Failed -> MaterialTheme.colorScheme.error
+    TransferState.Completed -> MaterialTheme.colorScheme.primary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
 }

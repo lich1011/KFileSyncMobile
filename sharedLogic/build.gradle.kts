@@ -99,10 +99,12 @@ kotlin {
             kotlin.srcDir(rootProject.file("../KFileSyncCore/build/android/kotlin"))
             dependencies {
                 implementation(libs.jna)
+                implementation(libs.sqldelight.sqliteDriver)
             }
         }
 
         androidMain.dependencies {
+            implementation(projects.kfilesyncCoreBindings)
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.sqldelight.androidDriver)
             implementation(libs.ktor.client.okhttp)

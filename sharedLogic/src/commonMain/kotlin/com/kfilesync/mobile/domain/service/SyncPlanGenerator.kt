@@ -31,59 +31,7 @@ import com.kfilesync.mobile.domain.model.SyncPlan
  * (essential because each side independently decides what to push, and we
  * don't want both sides to push the same file twice).
  */
-class SyncPlanGenerator {
+expect class SyncPlanGenerator() {
 
-    fun generate(local: List<FileEntry>, remote: List<FileEntry>): SyncPlan {
-        val localByPath = local.associateBy { it.path }
-        val remoteByPath = remote.associateBy { it.path }
-        val allPaths = (localByPath.keys + remoteByPath.keys).sorted()
-
-        val toPull = mutableListOf<FileEntry>()
-        val toPush = mutableListOf<FileEntry>()
-        val conflicts = mutableListOf<SyncConflict>()
-        val unchanged = mutableListOf<FileEntry>()
-
-        for (path in allPaths) {
-            val l = localByPath[path]
-            val r = remoteByPath[path]
-            when {
-                l != null && r == null -> toPush += l                  // case 1
-                l == null && r != null -> toPull += r                  // case 2
-                l != null && r != null -> classifyBothSides(l, r, toPull, toPush, conflicts, unchanged)
-            }
-        }
-
-        return SyncPlan(toPull = toPull, toPush = toPush, conflicts = conflicts, unchanged = unchanged)
-    }
-
-    private fun classifyBothSides(
-        local: FileEntry,
-        remote: FileEntry,
-        toPull: MutableList<FileEntry>,
-        toPush: MutableList<FileEntry>,
-        conflicts: MutableList<SyncConflict>,
-        unchanged: MutableList<FileEntry>
-    ) {
-        val localVec = local.versionVector
-        val remoteVec = remote.versionVector
-
-        when {
-            // Case 3: identical vectors - same logical version.
-            localVec == remoteVec -> unchanged += local
-
-            // Case 4: local strict-ancestor-of remote -> remote is newer, pull.
-            localVec.isAncestorOf(remoteVec) -> toPull += remote
-
-            // Case 5: remote strict-ancestor-of local -> local is newer, push.
-            remoteVec.isAncestorOf(localVec) -> toPush += local
-
-            // Case 6: concurrent edits - conflict.
-            else -> conflicts += SyncConflict(
-                shareId = local.shareId,
-                path = local.path,
-                local = local,
-                remote = remote
-            )
-        }
-    }
+    fun generate(local: List<FileEntry>, remote: List<FileEntry>): SyncPlan 
 }

@@ -99,7 +99,7 @@ class StorageMaintenanceService(
         // 1. Build the set of "still relevant" job IDs so we can spot orphans.
         val relevantJobIds = runCatching { transferRepository.findIncompleteJobs() }
             .getOrDefault(emptyList())
-            .filter { it.state !is TransferState.Completed && it.state !is TransferState.Failed && it.state != TransferState.Cancelled }
+            .filter { it.state != TransferState.Completed && it.state != TransferState.Failed && it.state != TransferState.Cancelled }
             .map { it.id.value }
             .toSet()
 

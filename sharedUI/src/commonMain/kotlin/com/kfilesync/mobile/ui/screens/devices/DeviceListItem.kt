@@ -110,7 +110,7 @@ internal fun platformGlyph(name: String): String = when (name) {
 }
 
 private fun DeviceState.toTrustStatus(): TrustStatus = when (this) {
-    is DeviceState.Discovered -> TrustStatus.Discovered
-    is DeviceState.Paired -> TrustStatus.Paired
-    is DeviceState.Revoked -> TrustStatus.Revoked
+    DeviceState.Discovered -> TrustStatus.Discovered
+    DeviceState.Paired -> TrustStatus.Paired
+    DeviceState.Revoked -> TrustStatus.Revoked
 }

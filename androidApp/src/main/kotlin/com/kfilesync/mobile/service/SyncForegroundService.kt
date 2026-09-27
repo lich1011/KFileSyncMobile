@@ -153,7 +153,7 @@ class SyncForegroundService : Service() {
             "$percent% • ${active.size} active transfers"
         }
 
-        val indeterminate = headline.state is TransferState.Verifying
+        val indeterminate = headline.state == TransferState.Verifying
         return NotificationCompat.Builder(this, CHANNEL_PROGRESS)
             .setContentTitle(title)
             .setContentText(body)
@@ -221,8 +221,8 @@ class SyncForegroundService : Service() {
     }
 
     private fun isActive(row: TransferRow): Boolean = when (row.state) {
-        is TransferState.Active,
-        is TransferState.Paused,
+        TransferState.Active,
+        TransferState.Paused,
         TransferState.Pending,
         TransferState.Verifying -> true
         else -> false

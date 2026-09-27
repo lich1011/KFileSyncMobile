@@ -1,12 +1,16 @@
 package com.kfilesync.mobile
 
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.kfilesync.mobile.application.service.DiscoveryCoordinator
 import com.kfilesync.mobile.domain.port.PlatformFile
 import com.kfilesync.mobile.platform.AndroidDirectoryPicker
 import com.kfilesync.mobile.platform.AndroidFilePicker
@@ -23,7 +27,7 @@ import org.koin.android.ext.android.inject
  * Phase 1 (T1.8) wired the full nav host. Phase 2 (T2.2) adds the SAF
  * launcher plumbing for the file picker:
  *
- * - The 'AndroidFilePicker' is a long-lived singleton bound in Koin's
+ * - The `AndroidFilePicker` is a long-lived singleton bound in Koin's
  * androidModule. It exposes a `SharedFlow<PickRequest>` that fires
  * whenever sharedLogic's TransferService calls `pickFiles()`.
  * - We `registerForActivityResult(OpenMultipleDocuments)` at Activity
@@ -41,6 +45,27 @@ class MainActivity : ComponentActivity() {
 
     private val filePicker: AndroidFilePicker by inject()
     private val directoryPicker: AndroidDirectoryPicker by inject()
+    private val discoveryCoordinator: DiscoveryCoordinator by inject()
+
+    /**
+     * NsdManager.discoverServices() starts "successfully" but silently never
+     * surfaces a peer without this permission (NEARBY_WIFI_DEVICES on API 33+,
+     * ACCESS_FINE_LOCATION below that) - it doesn't throw, so
+     * KFileSyncApplication's pre-permission discoveryCoordinator.start() call
+     * has no visible effect until we retry it here once the user grants it.
+     */
+    private val nearbyDevicesPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            lifecycleScope.launch {
+                runCatching { discoveryCoordinator.start() }
+                    .onFailure { Napier.w("discoveryCoordinator.start retry failed", it) }
+            }
+        } else {
+            Napier.w("nearby-devices permission denied; peer discovery will find no devices")
+        }
+    }
 
     private val safLauncher = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -84,7 +109,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Drain the picker's request flow - every TransferService.sendFiles()
-        // call ultimately reaches us here. The contract takes a String[] of
+        // call ultimately reaches us here, The contract takes a String[] of
         // MIME type filters; "*/*" lets the user pick any document type.
         lifecycleScope.launch {
             filePicker.requests.collectLatest { req ->
@@ -108,7 +133,32 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        requestNearbyDevicesPermissionIfNeeded()
+
         setContent { App() }
+    }
+
+    /**
+     * Request the permission NsdManager needs to surface discovery results,
+     * or - if already granted - retry `discoveryCoordinator.start()` so a
+     * grant persisted from a previous launch still picks up peers now that
+     * MainActivity (not just Application.onCreate) exists.
+     */
+    private fun requestNearbyDevicesPermissionIfNeeded() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            android.Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            lifecycleScope.launch {
+                runCatching { discoveryCoordinator.start() }
+                    .onFailure { Napier.w("discoveryCoordinator.start retry failed", it) }
+            }
+        } else {
+            nearbyDevicesPermissionLauncher.launch(permission)
+        }
     }
 
     /** Resolve a SAF content URI into the cross-platform [PlatformFile] descriptor. */

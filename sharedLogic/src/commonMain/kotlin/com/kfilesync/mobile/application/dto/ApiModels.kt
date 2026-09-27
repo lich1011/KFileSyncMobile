@@ -147,18 +147,6 @@ data class TransferAcceptDto(
  * (<= 16 MiB), and lets us keep the existing Ktor JSON pipeline. A binary
  * websocket path will replace this in Phase 5 if profiling justifies it.
  */
-@Serializable
-data class TransferChunkDto(
-    @SerialName("session_id") val sessionId: String,
-    @SerialName("job_id") val jobId: String,
-    @SerialName("file_id") val fileId: String,
-    @SerialName("chunk_index") val chunkIndex: Int,
-    @SerialName("chunk_size") val chunkSize: Int,
-    /** BLAKE3 hex of [dataB64] decoded to bytes - receiver verifies before persisting. */
-    @SerialName("chunk_hash") val chunkHash: String,
-    /** base64 of raw bytes (StdEncoding, no newlines). */
-    @SerialName("data_b64") val dataB64: String
-)
 
 @Serializable
 data class TransferChunkAckDto(

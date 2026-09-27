@@ -2,6 +2,7 @@ package com.kfilesync.mobile.infrastructure.persistence
 
 import com.kfilesync.mobile.db.File_entries
 import com.kfilesync.mobile.db.KFileSyncDatabase
+import com.kfilesync.mobile.domain.model.BlockInfo
 import com.kfilesync.mobile.domain.model.BlockLocation
 import com.kfilesync.mobile.domain.model.ContentHash
 import com.kfilesync.mobile.domain.model.DeviceId
@@ -12,6 +13,7 @@ import com.kfilesync.mobile.domain.model.VersionVector
 import com.kfilesync.mobile.domain.port.FileIndexRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -23,16 +25,19 @@ import kotlin.time.Instant
  *
  * Storage notes:
  * - `version_vector` is JSON-encoded `Map<String, Long>` (deviceId hex -> counter).
- * We accept the JSON-encode/decode cost per row because version-vector
- * reads are dominated by full-index scans (1x) rather than per-byte hot
- * paths. A future schema migration could move the vector to a side table.
- * - `blocks` is JSON-encoded `List<String>` (per-chunk BLAKE3 hex). Same
- * trade-off as the chunk_hashes column on transfer_items.
+ *   We accept the JSON-encode/decode cost per row because version-vector
+ *   reads are dominated by full-index scans (1x) rather than per-byte hot
+ *   paths. A future schema migration could move the vector to a side table.
+ * - `blocks` is JSON-encoded `List<BlockInfo>` (`index`/`size`/`hash` per
+ *   chunk). Same trade-off as the chunk_hashes column on transfer_items.
+ *   [decodeBlocks] also accepts the older bare `List<String>` (hash-only)
+ *   shape written before this column carried index/size, falling back to
+ *   `size = 0` for those rows until they're next rewritten.
  * - `entry_type` / `deleted` use the same string / 0/1 conventions as the
- * desktop client so a future "sync the SQLite file directly" optimisation
- * remains an option.
+ *   desktop client so a future "sync the SQLite file directly" optimisation
+ *   remains an option.
  *
- * Batch inserts via [upsertEntriesBatch] run in a single transaction –
+ * Batch inserts via [upsertEntriesBatch] run in a single transaction
  * indexer scans tend to touch hundreds of rows on the first scan of a new
  * share, and per-row autocommit is ~5x slower than batched.
  */
@@ -90,7 +95,7 @@ class SqlDelightFileIndexRepo(
         }
     }
 
-    // -------- row helpers --------
+    // ---------- row helpers ----------
 
     private fun writeRow(entry: FileEntry) {
         db.fileEntryQueries.upsertEntry(
@@ -134,12 +139,25 @@ class SqlDelightFileIndexRepo(
         VersionVector(map.mapKeys { DeviceId(it.key) })
     }.getOrElse { VersionVector() }
 
-    private fun encodeBlocks(blocks: List<String>): String =
-        json.encodeToString(ListSerializer(String.serializer()), blocks)
+    private fun encodeBlocks(blocks: List<BlockInfo>): String =
+        json.encodeToString(
+            ListSerializer(PersistedBlockInfo.serializer()),
+            blocks.map { PersistedBlockInfo(it.index, it.size, it.hash) }
+        )
 
-    private fun decodeBlocks(raw: String): List<String> = runCatching {
-        json.decodeFromString(ListSerializer(String.serializer()), raw)
-    }.getOrElse { emptyList() }
+    private fun decodeBlocks(raw: String): List<BlockInfo> = runCatching {
+        json.decodeFromString(ListSerializer(PersistedBlockInfo.serializer()), raw)
+            .map { BlockInfo(index = it.index, size = it.size, hash = it.hash) }
+    }.getOrElse {
+        // Pre-migration rows stored a bare List<String> of hashes only.
+        runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), raw)
+                .mapIndexed { index, hash -> BlockInfo(index = index, size = 0, hash = hash) }
+        }.getOrElse { emptyList() }
+    }
+
+    @Serializable
+    private data class PersistedBlockInfo(val index: Int, val size: Int, val hash: String)
 
     companion object {
         private val DEFAULT_JSON = Json {
@@ -147,14 +165,14 @@ class SqlDelightFileIndexRepo(
             encodeDefaults = true
         }
     }
-}
 
-private fun entryTypeToWire(t: EntryType): String = when (t) {
-    EntryType.File -> "file"
-    EntryType.Directory -> "directory"
-}
+    private fun entryTypeToWire(t: EntryType): String = when (t) {
+        EntryType.File -> "file"
+        EntryType.Directory -> "directory"
+    }
 
-private fun entryTypeFromWire(v: String): EntryType = when (v) {
-    "directory" -> EntryType.Directory
-    else -> EntryType.File
+    private fun entryTypeFromWire(v: String): EntryType = when (v) {
+        "directory" -> EntryType.Directory
+        else -> EntryType.File
+    }
 }

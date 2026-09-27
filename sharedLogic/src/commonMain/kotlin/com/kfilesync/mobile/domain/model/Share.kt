@@ -16,26 +16,22 @@ value class ShareId(val value: String)
  * incoming changes, and vice versa for "Receive only".
  */
 enum class SharePermission {
-    ReadOnly, ReadWrite, SendOnly, ReceiveOnly;
+    ReadOnly, ReadWrite;
 
-    fun canPush(): Boolean = this == ReadWrite || this == SendOnly
+    fun canPush(): Boolean = this == ReadWrite 
 
-    fun canPull(): Boolean = this == ReadWrite || this == ReadOnly || this == ReceiveOnly
+    fun canPull(): Boolean = this == ReadWrite || this == ReadOnly 
 
     /** Wire string used by `/share/invite` and `/share/authorize` (snake_case). */
     fun toWire(): String = when (this) {
         ReadOnly -> "read_only"
         ReadWrite -> "read_write"
-        SendOnly -> "send_only"
-        ReceiveOnly -> "receive_only"
     }
 
     companion object {
         fun fromWire(value: String): SharePermission = when (value) {
             "read_only" -> ReadOnly
             "read_write" -> ReadWrite
-            "send_only" -> SendOnly
-            "receive_only" -> ReceiveOnly
             else -> ReadOnly // safe default: minimum privilege
         }
     }

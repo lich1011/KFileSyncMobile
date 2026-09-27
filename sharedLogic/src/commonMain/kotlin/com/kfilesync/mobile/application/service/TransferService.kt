@@ -3,7 +3,6 @@ package com.kfilesync.mobile.application.service
 import com.kfilesync.mobile.application.dto.TransferAcceptDto
 import com.kfilesync.mobile.application.dto.TransferCancelDto
 import com.kfilesync.mobile.application.dto.TransferChunkAckDto
-import com.kfilesync.mobile.application.dto.TransferChunkDto
 import com.kfilesync.mobile.application.dto.TransferFileDto
 import com.kfilesync.mobile.application.dto.TransferRequestDto
 import com.kfilesync.mobile.application.identity.LocalIdentityProvider
@@ -33,11 +32,9 @@ import com.kfilesync.mobile.domain.port.FileSource
 import com.kfilesync.mobile.domain.port.TransferRepository
 import com.kfilesync.mobile.domain.port.PlatformFile
 import com.kfilesync.mobile.domain.service.ChunkingStrategy
-import com.kfilesync.mobile.infrastructure.crypto.Base64Codec
-import com.kfilesync.mobile.infrastructure.crypto.HashProvider
+import com.kfilesync.mobile.infrastructure.crypto.ChunkHasher
 import com.kfilesync.mobile.infrastructure.crypto.SecureRng
 import com.kfilesync.mobile.infrastructure.crypto.StreamingSha256
-import com.kfilesync.mobile.infrastructure.crypto.blake3
 import com.kfilesync.mobile.infrastructure.crypto.nextHex
 import com.kfilesync.mobile.infrastructure.crypto.toHexLower
 import com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient
@@ -124,13 +121,19 @@ interface TransferAppService {
 
     // -- Receiver-side wire callbacks (called by HTTP routes, not the UI) --
 
-    /** `POST /transfer/request` body lands here. Returns the accept-DTO synchronously. */
+    /** POST /transfer/request body lands here. Returns the accept-DTO synchronously. */
     suspend fun onTransferRequest(body: TransferRequestDto): TransferAcceptDto
 
-    /** `POST /transfer/chunks` body lands here. */
-    suspend fun onTransferChunk(body: TransferChunkDto): TransferChunkAckDto
+    /** POST /transfer/{jobId}/chunk/{fileId}/{chunkIndex} body lands here. */
+    suspend fun onTransferChunk(
+        jobId: String,
+        fileId: String,
+        chunkIndex: Int,
+        chunkHash: String,
+        bytes: ByteArray
+    ): TransferChunkAckDto
 
-    /** `POST /transfer/cancel` body lands here. */
+    /** POST /transfer/cancel body lands here. */
     suspend fun onTransferCancel(body: TransferCancelDto)
 
     /** Cancel all active transfers whose peer is [deviceId] (called on trust revocation). */
@@ -145,27 +148,29 @@ interface TransferAppService {
  *
  * Sender pipeline:
  * 1. `sendFiles(peer, files)` plans each file (chunk size, BLAKE3 per chunk,
- * whole-file SHA-256) on `Dispatchers.Default`.
+ *    whole-file SHA-256) on `Dispatchers.Default`.
  * 2. Builds a [TransferJob] via `TransferJob.newOutgoing(...)`, persists it.
- * 3. POSTs `/transfer/request` to the peer; peer answers with
- * [TransferAcceptDto] (with a `skipChunks` resume map).
+ * 3. POSTS `/transfer/request` to the peer; peer answers with
+ *    [TransferAcceptDto] (with a `skipChunks` resume map).
  * 4. For each file + each chunk (minus skip set), reads the chunk via the
- * [FileSource] adapter, BLAKE3s it, POSTs `/transfer/chunks` to the peer.
+ *    [FileSource] adapter, BLAKE3s it, POSTs `/transfer/{jobId}/chunk/{fileId}/`
+ *    `{chunkIndex}` (raw bytes + `X-Chunk-Hash` header) to the peer.
  * 5. On each ACK, updates the per-item checkpoint + emits a progress event.
  * 6. `verified=true` on the last chunk of a file marks it complete; once
- * every itme is complete the job itself is marked completed
+ *    every item is complete the job itself is marked completed.
  *
  * Receiver pipeline:
  * 1. `/transfer/request` -> store the incoming request + a Pending job;
- * surface to the user via [incomingRequests].
+ *    surface to the user via [incomingRequests].
  * 2. User accepts in the UI -> [acceptTransfer] flips status to Active +
- * opens a temp file per item via [FileSink].
- * 3. `/transfer/chunks` -> verify BLAKE3 of the chunk, write into temp file,
- * advance checkpoint, return ACK with `verified`(dto.rs's only field - 
- * file/job completion are no longer reported on the wire).
+ *    opens a temp file per item via [FileSink].
+ * 3. `/transfer/{jobId}/chunk/{fileId}/{chunkIndex}` -> verify BLAKE3 of the
+ *    chunk, write into temp file,
+ *    advance checkpoint, return ACK with `verified` (dto.rs's only field -
+ *    file/job completion are no longer reported on the wire).
  * 4. On file completion: streaming SHA-256 across the file's chunks (recomputed
- * from the temp file on disk) matches the manifest? Atomic move to final
- * destination via [FileSink.finalize].
+ *    from the temp file on disk) matches the manifest? Atomic move to final
+ *    destination via [FileSink.finalize].
  * 5. On job completion: publish [TransferCompleted].
  */
 class TransferServiceImpl(
@@ -195,14 +200,13 @@ class TransferServiceImpl(
     private val sessionsLock = Mutex()
     private val outgoingJobs = mutableMapOf<JobId, Job>()
 
-    // ------------------ sender side ------------------
+    // ----------------- sender side -----------------
 
     override suspend fun sendFiles(target: DeviceId, files: List<PlatformFile>): JobId {
         require(files.isNotEmpty()) { "sendFiles requires at least one file" }
         val peer = deviceRepository.findById(target)
             ?: throw DomainError.DeviceNotFound(target)
-        val peerState = peer.state
-        if (peerState !is DeviceState.Paired) {
+        if (peer.state != DeviceState.Paired) {
             throw DomainError.DeviceNotTrusted(target)
         }
         val now = clock()
@@ -252,7 +256,7 @@ class TransferServiceImpl(
         if (chunkSize == 0) {
             val bytes = fileSource.readWhole(file.locator)
             sha.update(bytes, 0, bytes.size)
-            chunkHashes += HashProvider.blake3(bytes).toHexLower()
+            chunkHashes += ChunkHasher.hash(bytes)
         } else {
             val totalChunks = ((size + chunkSize - 1) / chunkSize).toInt().coerceAtLeast(1)
             val buf = ByteArray(chunkSize)
@@ -260,10 +264,10 @@ class TransferServiceImpl(
                 val read = fileSource.readChunk(file.locator, i, chunkSize, buf)
                 if (read <= 0) break
                 sha.update(buf, 0, read)
-                chunkHashes += HashProvider.blake3(buf, read).toHexLower()
+                chunkHashes += ChunkHasher.hash(if (read == buf.size) buf else buf.copyOfRange(0, read))
             }
         }
-        // issue #16: DON'T close here. The chunk-upload loop in
+        // Issue #16: DON'T close here. The chunk-upload loop in
         // [uploadOneFile] re-reads the same locator; closing between plan
         // and upload would force the FileSource to re-open the underlying
         // SAF/security-scoped resource, opening a TOCTOU window where the
@@ -292,7 +296,16 @@ class TransferServiceImpl(
         }
         val local = localIdentityProvider.current()
 
-        // 3. POST /transfer/request and await the accept reply.
+        // 3. Mark Requested before the round trip so a crash while awaiting
+        //    the peer's reply is recoverable as "sent, no answer yet" rather
+        //    than looking untouched (Pending).
+        val requested = job.requestSent(clock()).getOrNull()
+        if (requested != null) {
+            transferRepository.saveJob(requested)
+            publishRow(requested, peerAlias)
+        }
+
+        // POST /transfer/request and await the accept reply.
         val acceptResp = httpClient.postTransferRequest(
             baseUrl = baseUrl,
             body = TransferRequestDto(
@@ -419,18 +432,14 @@ class TransferServiceImpl(
 
             val ack = httpClient.postTransferChunk(
                 baseUrl = baseUrl,
-                body = TransferChunkDto(
-                    sessionId = job.sessionId,
-                    jobId = job.id.value,
-                    fileId = item.fileId.value,
-                    chunkIndex = i,
-                    chunkSize = effective,
-                    chunkHash = HashProvider.blake3(chunkBytes).toHexLower(),
-                    dataB64 = Base64Codec.encode(chunkBytes)
-                )
+                jobId = job.id.value,
+                fileId = item.fileId.value,
+                chunkIndex = i,
+                chunkHash = ChunkHasher.hash(chunkBytes),
+                bytes = chunkBytes
             )
             if (!ack.verified) {
-                failOutgoing(job.id, "peer rejected chunk $i for ${item.path}")
+                failOutgoing(job.id, "peer rejected chunk $i for${item.path}")
                 return false
             }
             // TransferChunkAckDto no longer reports file/job completion on the
@@ -479,7 +488,7 @@ class TransferServiceImpl(
             )
         }
 
-        // File boundary: persist the shadow progress to the DB so a crash
+        // File boundary; persist the shadow progress to the DB so a crash
         // mid-file doesn't lose the last-chunk-write delta.
         transferRepository.updateProgress(
             jobId = job.id,
@@ -490,6 +499,7 @@ class TransferServiceImpl(
                 totalFiles = shadow.totalFiles
             )
         )
+
         // Issue #16: do NOT close the source between files - close once at
         // the end of [runOutgoing]. Closing per-file would force re-open
         // for the next iteration of the same content-URI on Android.
@@ -520,16 +530,16 @@ class TransferServiceImpl(
         publishRow(failed, peerAlias = lookupAlias(failed.peerDeviceId))
         eventBus.publish(TransferFailed(jobId = jobId, reason = reason))
         outgoingJobs.remove(jobId)
-        Napier.w("outgoing job ${jobId.value} failed: $reason")
+        Napier.w("outgoing job ${jobId.value} failed:$reason")
     }
 
-    // ------------------ receiver side ------------------
+    // ----------------- receiver side -----------------
 
     override suspend fun onTransferRequest(body: TransferRequestDto): TransferAcceptDto {
         val now = clock()
         val fromId = DeviceId(body.fromDeviceId)
         val from = deviceRepository.findById(fromId)
-        if (from == null || from.state !is DeviceState.Paired) {
+        if (from == null || from.state != DeviceState.Paired) {
             Napier.w("transfer request from unknown / untrusted ${body.fromDeviceId}; rejecting")
             return TransferAcceptDto(
                 sessionId = body.sessionId,
@@ -579,16 +589,16 @@ class TransferServiceImpl(
             )
             // Issue #26: atomic update.
             incomingRequests.update { it + request }
-        }
 
-        eventBus.publish(
-            TransferRequested(
-                jobId = jobId,
-                peerDeviceId = fromId,
-                totalBytes = job.totalBytes,
-                totalFiles = job.totalFiles
+            eventBus.publish(
+                TransferRequested(
+                    jobId = jobId,
+                    peerDeviceId = fromId,
+                    totalBytes = job.totalBytes,
+                    totalFiles = job.totalFiles
+                )
             )
-        )
+        }
 
         // Note: we *accept* eagerly for resume (existing != null) so a re-request
         // after restart doesn't strand the peer. New requests are auto-accepted
@@ -652,24 +662,26 @@ class TransferServiceImpl(
         return Result.success(Unit)
     }
 
-    override suspend fun onTransferChunk(body: TransferChunkDto): TransferChunkAckDto {
-        val jobId = JobId(body.jobId)
-        val fileId = FileId(body.fileId)
-        val job = transferRepository.findById(jobId) ?: run {
-            Napier.w("onTransferChunk: unknown job ${body.jobId}")
-            return TransferChunkAckDto(
-                jobId = body.jobId, fileId = body.fileId, chunkIndex = body.chunkIndex, verified = false
-            )
+    override suspend fun onTransferChunk(
+        jobId: String,
+        fileId: String,
+        chunkIndex: Int,
+        chunkHash: String,
+        bytes: ByteArray
+    ): TransferChunkAckDto {
+        val jobIdV = JobId(jobId)
+        val fileIdV = FileId(fileId)
+        val job = transferRepository.findById(jobIdV) ?: run {
+            Napier.w("onTransferChunk: unknown job $jobId")
+            return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
         }
-        val item = job.items.firstOrNull { it.fileId == fileId } ?: run {
-            Napier.w("onTransferChunk: unknown file ${body.fileId} in job ${body.jobId}")
-            return TransferChunkAckDto(
-                jobId = body.jobId, fileId = body.fileId, chunkIndex = body.chunkIndex, verified = false
-            )
+        val item = job.items.firstOrNull { it.fileId == fileIdV } ?: run {
+            Napier.w("onTransferChunk: unknown file $fileId in job$jobId")
+            return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
         }
 
         val session = sessionsLock.withLock {
-            sessions.getOrPut(jobId) { ReceiveSession(jobId = jobId, targetDirectory = null) }
+            sessions.getOrPut(jobIdV) { ReceiveSession(jobId = jobIdV, targetDirectory = null) }
         }
 
         // Issue #14: gate all chunk handling on the user having explicitly
@@ -683,73 +695,66 @@ class TransferServiceImpl(
             if (allHaveTemp && job.items.isNotEmpty()) {
                 session.userAccepted = true
             } else {
-                Napier.w("onTransferChunk: awaiting user acceptance for job ${body.jobId}")
-                return TransferChunkAckDto(
-                    jobId = body.jobId,
-                    fileId = body.fileId,
-                    chunkIndex = body.chunkIndex,
-                    verified = false,
-                )
+                Napier.w("onTransferChunk: awaiting user acceptance for job $jobId")
+                return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
             }
         }
 
         // Auto-open temp sink if accept-dialog wasn't routed (e.g. resume-on-restart).
-        val tempLocator = session.tempLocators.getOrPut(fileId) {
+        val tempLocator = session.tempLocators.getOrPut(fileIdV) {
             item.tempPath ?: fileSink.openTemp(item.path.substringAfterLast('/'))
         }
-        val sha = session.sha256.getOrPut(fileId) { StreamingSha256() }
+        val sha = session.sha256.getOrPut(fileIdV) { StreamingSha256() }
 
-        // 1. Verify chunk-level BLAKE3.
-        val decoded: ByteArray = try { Base64Codec.decode(body.dataB64) } catch (t: Throwable) {
-            Napier.w("onTransferChunk: failed to decode base64 chunk: ${t.message}")
-            return TransferChunkAckDto(
-                jobId= body.jobId, fileId = body.fileId, chunkIndex = body.chunkIndex, verified = false
-            )
+       // 1. Verify chunk-level BLAKE3: the body matches the hash declared in
+        // the X-Chunk-Hash header (constant-time where the platform
+        // supports it), then that header hash matches what the manifest
+        // expects for this index (mirrors the desktop client's
+        // handle_chunk_upload double-check: verify_chunk(header) &&
+        // header == manifest.hash).
+        if (!ChunkHasher.verify(bytes, chunkHash)) {
+            eventBus.publish(ChunkVerificationFailed(jobIdV, fileIdV, chunkIndex))
+            Napier.w("onTransferChunk: chunk body does not match X-Chunk-Hash (index=$chunkIndex)")
+            return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
         }
-
-        val expectedHash = item.manifest.chunkHashes.getOrNull(body.chunkIndex)
-        val actualHash = HashProvider.blake3(decoded).toHexLower()
-        if (expectedHash == null || actualHash != expectedHash) {
-            eventBus.publish(ChunkVerificationFailed(jobId, fileId, body.chunkIndex))
-            Napier.w("onTransferChunk: chunk hash mismatch (expected=$expectedHash actual=$actualHash)")
-            return TransferChunkAckDto(
-                jobId= body.jobId, fileId = body.fileId, chunkIndex = body.chunkIndex, verified = false
-            )
+        val expectedHash = item.manifest.chunkHashes.getOrNull(chunkIndex)
+        if (expectedHash == null || chunkHash != expectedHash) {
+            eventBus.publish(ChunkVerificationFailed(jobIdV, fileIdV, chunkIndex))
+            Napier.w("onTransferChunk: chunk hash mismatch (expected=$expectedHash actual=$chunkHash)")
+            return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
         }
 
         // 2. Write chunk into temp file at the right offset.
-        val offset = body.chunkIndex.toLong() *
-                (if (item.manifest.chunkSize == 0) 0L else item.manifest.chunkSize.toLong())
-        fileSink.writeChunk(tempLocator, offset, decoded, decoded.size)
-        sha.update(decoded, 0, decoded.size)
+        val offset = chunkIndex.toLong() *
+            (if (item.manifest.chunkSize == 0) 0L else item.manifest.chunkSize.toLong())
+        fileSink.writeChunk(tempLocator, offset, bytes, bytes.size)
+        sha.update(bytes, 0, bytes.size)
 
         // 3. Advance checkpoint + emit progress.
-        val newChunksDone = (body.chunkIndex + 1).coerceAtMost(item.manifest.totalChunks)
+        val newChunksDone = (chunkIndex + 1).coerceAtMost(item.manifest.totalChunks)
         transferRepository.updateItemCheckpoint(
-            jobId = jobId, fileId = fileId, chunksDone = newChunksDone,
+            jobId = jobIdV, fileId = fileIdV, chunksDone = newChunksDone,
             status = if (newChunksDone >= item.manifest.totalChunks) "verifying" else "active"
         )
-        var refreshed = transferRepository.findById(jobId) ?: job
-        transferRepository.updateProgress(jobId, refreshed.progress())
+        var refreshed = transferRepository.findById(jobIdV) ?: job
+        transferRepository.updateProgress(jobIdV, refreshed.progress())
 
         // 4. File completed? Verify whole-file SHA-256 + atomic move.
         if (newChunksDone >= item.manifest.totalChunks) {
             val finalSha = sha.finalize().toHexLower()
             if (finalSha != item.sha256) {
                 fileSink.discard(tempLocator)
-                session.tempLocators.remove(fileId)
-                session.sha256.remove(fileId)
+                session.tempLocators.remove(fileIdV)
+                session.sha256.remove(fileIdV)
                 refreshed = refreshed.fail("SHA-256 mismatch on ${item.path}", clock()).getOrNull() ?: refreshed
                 transferRepository.saveJob(refreshed)
                 publishRow(refreshed, peerAlias = lookupAlias(refreshed.peerDeviceId))
-                eventBus.publish(TransferFailed(jobId, "SHA-256 mismatch on ${item.path}"))
+                eventBus.publish(TransferFailed(jobIdV, "SHA-256 mismatch on ${item.path}"))
                 // TransferChunkAckDto has only `verified` on the wire (dto.rs);
                 // overload it to false here too so the sender still learns
                 // this final chunk's whole-file verification failed.
                 Napier.w("onTransferChunk: sha256 mismatch on ${item.path}")
-                return TransferChunkAckDto(
-                    jobId= body.jobId, fileId = body.fileId, chunkIndex = body.chunkIndex, verified = false
-                )
+                return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
             }
 
             val finalLocator = fileSink.finalize(
@@ -758,10 +763,10 @@ class TransferServiceImpl(
                 fileName = item.path.substringAfterLast('/')
             )
 
-            session.tempLocators.remove(fileId)
-            session.sha256.remove(fileId)
+            session.tempLocators.remove(fileIdV)
+            session.sha256.remove(fileIdV)
             refreshed = refreshed.withItem(
-                fileId,
+                fileIdV,
                 item.markCompleted().copy(tempPath = finalLocator),
                 clock()
             )
@@ -772,13 +777,13 @@ class TransferServiceImpl(
         if (refreshed.items.all { it.isComplete }) {
             refreshed = refreshed.complete(clock()).getOrNull() ?: refreshed
             transferRepository.saveJob(refreshed)
-            sessionsLock.withLock { sessions.remove(jobId) }
-            eventBus.publish(TransferCompleted(jobId, refreshed.totalBytes))
+            sessionsLock.withLock { sessions.remove(jobIdV) }
+            eventBus.publish(TransferCompleted(jobIdV, refreshed.totalBytes))
         }
         publishRow(refreshed, peerAlias = lookupAlias(refreshed.peerDeviceId))
         eventBus.publish(
             TransferProgressAdvanced(
-                jobId = jobId,
+                jobId = jobIdV,
                 transferredBytes = refreshed.transferredBytes,
                 totalBytes = refreshed.totalBytes,
                 completedFiles = refreshed.completedFiles,
@@ -786,12 +791,7 @@ class TransferServiceImpl(
             )
         )
 
-        return TransferChunkAckDto(
-            jobId = body.jobId,
-            fileId = body.fileId,
-            chunkIndex = body.chunkIndex,
-            verified = true
-        )
+        return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = true)
     }
 
     override suspend fun onTransferCancel(body: TransferCancelDto) {

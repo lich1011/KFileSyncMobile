@@ -208,7 +208,7 @@ class SyncServiceImpl(
         val targets = share.members
             .map { it.deviceId }
             .filter { it != me }
-            .filter { deviceRepository.findById(it)?.state is DeviceState.Paired }
+            .filter { deviceRepository.findById(it)?.state == DeviceState.Paired }
 
         var anyFailed = false
         for (peer in targets) {

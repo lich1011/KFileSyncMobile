@@ -19,7 +19,7 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
- * SQLDelight-backed implementation of [DeviceRepository].
+ * SqlDelight-backed implementation of [DeviceRepository].
  *
  * The on-disk schema (Device.sq) uses snake_case strings for enums and JSON
  * for the list-of-addresses column, matching the desktop's SQLite layout so
@@ -55,16 +55,18 @@ class SqlDelightDeviceRepo(
 
     override suspend fun save(device: Device): Long = withContext(Dispatchers.Default) {
         val now = Clock.System.now().toEpochMilliseconds()
-        val (trustStatus, pairedAt) = trustColumns(device.state)
         db.deviceQueries.insert(
             device_id = device.id.value,
             alias = device.alias,
             platform = platformToWire(device.platform),
             device_type = deviceTypeToWire(device.deviceType),
-            certificate_pem = (device.state as? DeviceState.Paired)?.certificatePem ?: "",
-            trust_status = trustStatus,
+            certificate_pem = device.certificatePem ?: "",
+            trust_status = trustStatusFromState(device.state),
             addresses = addressesToJsonOrNull(device.addresses),
-            paired_at = pairedAt,
+            discovered_at = device.discoveredAt.toEpochMilliseconds(),
+            paired_at = device.pairedAt?.toEpochMilliseconds(),
+            revoked_at = device.revokedAt?.toEpochMilliseconds(),
+            revoked_reason = device.revokedReason,
             last_seen_at = now,
             created_at = now
         ).value
@@ -98,38 +100,35 @@ class SqlDelightDeviceRepo(
         db.deviceQueries.delete(device_id = id.value).value
     }
 
-    // ------------------ row -> domain mapping ------------------
+    // ==================== row -> domain mapping ====================
 
     private fun Devices.toDomain(): Device {
         val addrs = addresses?.let { parseAddressList(it) } ?: emptyList()
-        val state = buildState(trust_status, certificate_pem, paired_at)
         return Device(
             id = DeviceId(device_id),
             alias = alias,
             platform = platformFromWire(platform),
             deviceType = deviceTypeFromWire(device_type),
             addresses = addrs,
-            state = state
+            state = trustStatusToState(trust_status),
+            discoveredAt = Instant.fromEpochMilliseconds(discovered_at ?: created_at),
+            pairedAt = paired_at?.let { Instant.fromEpochMilliseconds(it) },
+            certificatePem = certificate_pem.ifEmpty { null },
+            revokedAt = revoked_at?.let { Instant.fromEpochMilliseconds(it) },
+            revokedReason = revoked_reason
         )
     }
 
-    private fun buildState(trustStatus: String, certPem: String, pairedAt: Long?): DeviceState = when (trustStatus) {
-        "paired" -> DeviceState.Paired(
-            certificatePem = certPem,
-            pairedAt = Instant.fromEpochMilliseconds(pairedAt ?: 0L)
-        )
-        "revoked" -> DeviceState.Revoked(
-            revokedAt = Instant.fromEpochMilliseconds(pairedAt ?: 0L)
-        )
-        else -> DeviceState.Discovered(
-            discoveredAt = Instant.fromEpochMilliseconds(pairedAt ?: 0L)
-        )
+    private fun trustStatusToState(trustStatus: String): DeviceState = when (trustStatus) {
+        "paired" -> DeviceState.Paired
+        "revoked" -> DeviceState.Revoked
+        else -> DeviceState.Discovered
     }
 
-    private fun trustColumns(state: DeviceState): Pair<String, Long?> = when (state) {
-        is DeviceState.Discovered -> "discovered" to state.discoveredAt.toEpochMilliseconds()
-        is DeviceState.Paired -> "paired" to state.pairedAt.toEpochMilliseconds()
-        is DeviceState.Revoked -> "revoked" to state.revokedAt.toEpochMilliseconds()
+    private fun trustStatusFromState(state: DeviceState): String = when (state) {
+        DeviceState.Discovered -> "discovered"
+        DeviceState.Paired -> "paired"
+        DeviceState.Revoked -> "revoked"
     }
 
     private fun addressesToJsonOrNull(addresses: List<DeviceAddress>): String? {

@@ -29,15 +29,15 @@ import kotlin.time.Instant
  *
  * Persistence strategy:
  * - [saveJob] runs an explicit `transaction { ... }`: delete + re-insert
- * every item row, then upsert the header. That keeps the on-disk
- * aggregate atomic with respect to the in-memory one.
+ *   every item row, then upsert the header. That keeps the on-disk
+ *   aggregate atomic with respect to the in-memory one.
  * - [updateProgress] and [updateItemCheckpoint] are single-row updates;
- * they're called on the hot path (once per verified chunk) and must
- * not pay for a full transaction.
+ *   they're called on the hot path (once per verified chunk) and must
+ *   not pay for a full transaction.
  * - `chunk_hashes` is persisted as JSON (a list of hex strings); we use the
- * same Json instance as [SqlDelightDeviceRepo] for consistency. Future
- * schema migrations can move this to a side table if we ever need to query
- * per-hash, but Phase 2 only reads the full list.
+ *   same Json instance as [SqlDelightDeviceRepo] for consistency. Future
+ *   schema migrations can move this to a side table if we ever need to query
+ *   per-hash, but Phase 2 only reads the full list.
  */
 class SqlDelightTransferRepo(
     private val db: KFileSyncDatabase,
@@ -139,7 +139,7 @@ class SqlDelightTransferRepo(
         }
     }
 
-    // -------- row -> domain mapping --------
+    // ---------- row -> domain mapping ----------
 
     private fun itemsFor(jobIdValue: String): List<Transfer_items> =
         db.transferJobQueries.getItemsForJob(jobIdValue).executeAsList()
@@ -157,7 +157,8 @@ class SqlDelightTransferRepo(
 
     private fun Transfer_jobs.toDomain(itemRows: List<Transfer_items>): TransferJob {
         val items = itemRows.map { it.toDomain() }
-        val state = wireToState(status, error_message, Instant.fromEpochMilliseconds(updated_at))
+        val state = wireToState(status)
+        val updatedAt = Instant.fromEpochMilliseconds(updated_at)
         return TransferJob(
             id = JobId(job_id),
             sessionId = session_id,
@@ -167,8 +168,16 @@ class SqlDelightTransferRepo(
             items = items,
             state = state,
             createdAt = Instant.fromEpochMilliseconds(created_at),
-            updatedAt = Instant.fromEpochMilliseconds(updated_at),
-            errorMessage = error_message
+            updatedAt = updatedAt,
+            errorMessage = error_message,
+            // Not persisted as separate columns - recomputed/approximated on
+            // rehydration, matching the pre-flatten behaviour (see
+            // TransferJob.transferredChunks()),
+            startedAt = if (state == TransferState.Active || state == TransferState.Paused) updatedAt else null,
+            chunksDone = if (state == TransferState.Active || state == TransferState.Paused) {
+                items.sumOf { it.checkpoint.chunksDone }
+            } else null,
+            completedAt = if (state == TransferState.Completed) updatedAt else null
         )
     }
 
@@ -208,7 +217,7 @@ class SqlDelightTransferRepo(
         }
     }
 
-    // -------- enum <=> wire string --------
+    // ---------- enum <=> wire string ----------
 
     private fun directionToWire(d: TransferDirection): String = when (d) {
         TransferDirection.Outgoing -> "outgoing"
@@ -224,28 +233,24 @@ class SqlDelightTransferRepo(
     private fun jobTypeFromShare(shareId: ShareId?): String = if (shareId == null) "direct" else "share"
 
     private fun stateToWire(state: TransferState): String = when (state) {
-        is TransferState.Pending -> "pending"
-        is TransferState.Active -> "active"
-        is TransferState.Paused -> "paused"
-        is TransferState.Verifying -> "verifying"
-        is TransferState.Completed -> "completed"
-        is TransferState.Failed -> "failed"
-        is TransferState.Cancelled -> "cancelled"
+        TransferState.Pending -> "pending"
+        TransferState.Requested -> "requested"
+        TransferState.Active -> "active"
+        TransferState.Paused -> "paused"
+        TransferState.Verifying -> "verifying"
+        TransferState.Completed -> "completed"
+        TransferState.Failed -> "failed"
+        TransferState.Cancelled -> "cancelled"
     }
 
-    private fun wireToState(
-        status: String,
-        errorMessage: String?,
-        updatedAt: Instant
-    ): TransferState = when (status) {
+    private fun wireToState(status: String): TransferState = when (status) {
         "pending" -> TransferState.Pending
-        // We don't persist chunksDone for the in-flight state machine - the
-        // aggregate recomputes it from per-item checkpoints on rehydration.
-        "active" -> TransferState.Active(startedAt = updatedAt, chunksDone = 0)
-        "paused" -> TransferState.Paused(Checkpoint(0))
+        "requested" -> TransferState.Requested
+        "active" -> TransferState.Active
+        "paused" -> TransferState.Paused
         "verifying" -> TransferState.Verifying
-        "completed" -> TransferState.Completed(updatedAt)
-        "failed" -> TransferState.Failed(errorMessage ?: "unknown", retries = 0)
+        "completed" -> TransferState.Completed
+        "failed" -> TransferState.Failed
         "cancelled" -> TransferState.Cancelled
         else -> TransferState.Pending
     }

@@ -144,6 +144,4 @@ private fun SyncMode.label(): String = when (this) {
 private fun SharePermission.label(): String = when (this) {
     SharePermission.ReadOnly -> stringResource(Res.string.shares_permission_readonly)
     SharePermission.ReadWrite -> stringResource(Res.string.shares_permission_readwrite)
-    SharePermission.SendOnly -> stringResource(Res.string.shares_permission_sendonly)
-    SharePermission.ReceiveOnly -> stringResource(Res.string.shares_permission_receiveonly)
 }

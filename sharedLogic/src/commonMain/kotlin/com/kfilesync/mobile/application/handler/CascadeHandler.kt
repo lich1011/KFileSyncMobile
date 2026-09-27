@@ -106,7 +106,7 @@ class CascadeHandler(
             val local = localIdentityProvider.current()
             if (share.createdBy == local.deviceId) return@runCatching
             val creator = deviceRepository.findById(share.createdBy) ?: return@runCatching
-            if (creator.state !is com.kfilesync.mobile.domain.model.DeviceState.Paired) return@runCatching
+            if (creator.state != com.kfilesync.mobile.domain.model.DeviceState.Paired) return@runCatching
             val addr = creator.addresses.firstOrNull() ?: return@runCatching
             val baseUrl = "https://${addr.host}:${addr.port}"
             httpClient.postShareLeave(

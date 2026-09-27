@@ -120,7 +120,7 @@ class ShareServiceImpl(
     override suspend fun onShareInvite(body: ShareInviteDto): Result<Unit> = lock.withLock {
         val fromId = DeviceId(body.fromDeviceId)
         val from = deviceRepository.findById(fromId)
-        if (from == null || from.state !is DeviceState.Paired) {
+        if (from == null || from.state != DeviceState.Paired) {
             Napier.w("rejecting /share/invite from untrusted ${body.fromDeviceId}")
             return Result.failure(DomainError.DeviceNotTrusted(fromId))
         }
@@ -178,7 +178,7 @@ class ShareServiceImpl(
 
     override suspend fun onShareAuthorize(body: ShareAuthorizeDto, fromDeviceId: DeviceId): Result<Unit> = lock.withLock {
         val from = deviceRepository.findById(fromDeviceId)
-        if (from == null || from.state !is DeviceState.Paired) {
+        if (from == null || from.state != DeviceState.Paired) {
             Napier.w("rejecting /share/authorize from untrusted ${fromDeviceId.value}")
             return Result.failure(DomainError.DeviceNotTrusted(fromDeviceId))
         }
@@ -300,7 +300,7 @@ class ShareServiceImpl(
     override suspend fun onShareLeave(body: ShareLeaveDto): Result<Unit> = lock.withLock {
         val leaver = DeviceId(body.deviceId)
         val from = deviceRepository.findById(leaver)
-        if (from == null || from.state !is DeviceState.Paired) {
+        if (from == null || from.state != DeviceState.Paired) {
             Napier.w("rejecting /share/leave from untrusted ${body.deviceId}")
             return Result.failure(DomainError.DeviceNotTrusted(leaver))
         }

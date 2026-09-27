@@ -171,6 +171,4 @@ private fun syncModeText(mode: SyncMode): String = when (mode) {
 private fun permissionText(p: SharePermission): String = when (p) {
     SharePermission.ReadOnly -> "Read only"
     SharePermission.ReadWrite -> "Read / write"
-    SharePermission.SendOnly -> "Send only"
-    SharePermission.ReceiveOnly -> "Receive only"
 }

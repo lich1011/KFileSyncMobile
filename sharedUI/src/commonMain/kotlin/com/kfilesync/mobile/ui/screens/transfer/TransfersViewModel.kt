@@ -130,13 +130,14 @@ class TransfersViewModel(
         dialog: SendDialogState
     ): TransfersUiState {
         val (active, history) = transfers.partition { row ->
-            row.state is com.kfilesync.mobile.domain.model.TransferState.Active ||
-                    row.state is com.kfilesync.mobile.domain.model.TransferState.Paused ||
+            row.state == com.kfilesync.mobile.domain.model.TransferState.Active ||
+                    row.state == com.kfilesync.mobile.domain.model.TransferState.Paused ||
                     row.state == com.kfilesync.mobile.domain.model.TransferState.Pending ||
+                    row.state == com.kfilesync.mobile.domain.model.TransferState.Requested ||
                     row.state == com.kfilesync.mobile.domain.model.TransferState.Verifying
         }
 
-        val pairedDevices = devices.filter { it.state is DeviceState.Paired }
+        val pairedDevices = devices.filter { it.state == DeviceState.Paired }
         return TransfersUiState(
             active = active,
             history = history,

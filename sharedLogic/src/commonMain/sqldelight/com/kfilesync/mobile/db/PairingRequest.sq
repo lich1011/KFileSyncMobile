@@ -12,7 +12,8 @@ CREATE TABLE pairing_requests (
     pin                 TEXT NOT NULL,
     peer_fingerprint    TEXT NOT NULL,
     nonce               TEXT NOT NULL,
-    attempts_remaining  INTEGER NOT NULL DEFAULT 3,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    max_attempts        INTEGER NOT NULL DEFAULT 3,
     created_at          INTEGER NOT NULL,
     expires_at        INTEGER NOT NULL,
     -- Captured from PairRequestDto at receiveIncoming() time so
@@ -38,12 +39,12 @@ WHERE status = 'pending' AND expires_at > ?;
 insert:
 INSERT OR REPLACE INTO pairing_requests(
     request_id, peer_device_id, direction, status, pin, peer_fingerprint,
-    nonce, attempts_remaining, created_at, expires_at, peer_alias, peer_platform
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    nonce, attempts, max_attempts, created_at, expires_at, peer_alias, peer_platform
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateStatusAndAttempts:
 UPDATE pairing_requests
-SET status = ?, attempts_remaining = ?
+SET status = ?, attempts = ?
 WHERE request_id = ?;
 
 cleanup:

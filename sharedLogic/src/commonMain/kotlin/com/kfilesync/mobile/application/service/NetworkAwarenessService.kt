@@ -72,7 +72,7 @@ class NetworkAwarenessService(
 
     private suspend fun onWifiLost() {
         val active = transferRepository.findIncompleteJobs()
-            .filter { it.state is TransferState.Active }
+            .filter { it.state == TransferState.Active }
         for (j in active) {
             val paused = j.pause(now()).getOrNull() ?: continue
             runCatching { transferRepository.saveJob(paused) }.getOrNull() ?: continue
@@ -89,7 +89,7 @@ class NetworkAwarenessService(
         autoPaused.clear()
 
         val toResume = transferRepository.findIncompleteJobs()
-            .filter { j -> j.id.value in ids && j.state is TransferState.Paused }
+            .filter { j -> j.id.value in ids && j.state == TransferState.Paused }
         for (j in toResume) {
             val resumed = j.start(now()).getOrNull() ?: continue
             runCatching { transferRepository.saveJob(resumed) }

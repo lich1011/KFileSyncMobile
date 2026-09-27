@@ -1,7 +1,6 @@
 package com.kfilesync.mobile.domain.model
 
 import com.kfilesync.mobile.domain.DomainError
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
@@ -32,15 +31,25 @@ enum class PairingDirection { Outgoing, Incoming }
 /** Lifecycle of a pairing session. */
 enum class PairingStatus { Pending, Succeeded, Failed, Expired, Cancelled }
 
+/** Result of [PairingSession.applyVerdict]: the session to persist, plus the outcome. */
+data class PinVerdictOutcome(val session: PairingSession, val result: Result<Unit>)
+
 /**
  * PairingSession aggregate root (design doc §6.1.2, T1.3).
  *
  * Invariants enforced inside the aggregate:
  * - PIN is 6 digits (via [PairingCode])
- * - At most 3 failed attempts before the session is marked Failed
+ * - At most [maxAttempts] failed attempts before the session is marked Failed
  * - Session expires 5 minutes after creation (configurable for tests)
  * - Once a terminal state (Succeeded/Failed/Expired/Cancelled) is reached,
- * no further transitions are allowed.
+ *   no further transitions are allowed.
+ *
+ * 'attempts'/'maxAttempts' count upward (Sprint 5: adopted to match core's
+ * `domain::PairingSession` record shape, which mobile's PIN validation now
+ * delegates to via [com.kfilesync.mobile.domain.service.PairingStateMachine]
+ * - see that class for why the state machine itself, not this aggregate,
+ * owns the attempt-counting logic), UI code wanting "attempts remaining"
+ * computes `maxAttempts - attempts`.
  *
  * Pure data + pure methods only - no IO. Persistence is a separate concern
  * handled by [com.kfilesync.mobile.domain.port.PairingRequestRepository] (T1.6).
@@ -55,17 +64,18 @@ data class PairingSession(
     val peerAlias: String,
     val peerPlatform: DevicePlatform,
     val expiry: SessionExpiry,
-    val attemptsRemaining: Int = MAX_ATTEMPTS,
+    val attempts: Int = 0,
+    val maxAttempts: Int = MAX_ATTEMPTS,
     val status: PairingStatus = PairingStatus.Pending,
     val createdAt: Instant
 ) {
     init {
-        require(attemptsRemaining in 0..MAX_ATTEMPTS) {
-            "attemptsRemaining out of range: $attemptsRemaining"
+        require(attempts in 0..maxAttempts) {
+            "attempts out of range: $attempts (maxAttempts=$maxAttempts)"
         }
     }
 
-    /** True if the session is still in a state where [submitPin] is meaningful. */
+    /** True if the session is still in a state where [applyVerdict] is meaningful. */
     val isOpen: Boolean get() = status == PairingStatus.Pending
 
     /**
@@ -83,98 +93,46 @@ data class PairingSession(
         if (isOpen) copy(status = PairingStatus.Cancelled) else this
 
     /**
-     * Submit a PIN attempt. Returns either:
-     * - Success(updated session in [PairingStatus.Succeeded]) if the PIN matches and the session is open & unexpired.
-     * - Failure([DomainError]) if the session is expired/closed/invalid PIN
-     *
-     * On a wrong PIN this method does NOT mutate the receiver - callers must
-     * call [decrementAttempt] to persist the failed-attempt side effect.
-     * Keeping these two operations separate lets the application service log
-     * + persist the failure before exposing it back to the UI.
+     * Apply a [com.kfilesync.mobile.domain.service.PinVerdict] produced by
+     * [com.kfilesync.mobile.domain.service.PairingStateMachine.verifyPeerPin]
+     * - the state machine already advanced `attempts`; this folds that
+     * updated count plus the verdict into the aggregate's own status field.
+     * The updated session (to persist regardless of outcome) is always
+     * available via [PinVerdictOutcome.session]; [PinVerdictOutcome.result]
+     * mirrors the old [submitPin] contract for callers that only care about
+     * success/failure.
      */
-    fun submitPin(candidate: PairingCode, now: Instant): Result<PairingSession> {
-        // Always project expiry forward first so a stale-but-correct PIN can't sneak in.
-        val current = expireIfNeeded(now)
-        if (!current.isOpen) {
-            return Result.failure(DomainError.InvalidStateTransition("session ${current.status}"))
+    fun applyVerdict(
+        verdict: com.kfilesync.mobile.domain.service.PinVerdict,
+        newAttempts: Int
+    ): PinVerdictOutcome {
+        val remaining = maxAttempts - newAttempts
+        return when (verdict) {
+            com.kfilesync.mobile.domain.service.PinVerdict.Accepted -> PinVerdictOutcome(
+                session = copy(attempts = newAttempts, status = PairingStatus.Succeeded),
+                result = Result.success(Unit)
+            )
+            com.kfilesync.mobile.domain.service.PinVerdict.Wrong -> {
+                val reason = if (remaining <= 0) "max attempts exceeded" else "wrong PIN; $remaining attempt(s) remaining"
+                PinVerdictOutcome(
+                    session = if (remaining <= 0) copy(attempts = newAttempts, status = PairingStatus.Failed)
+                              else copy(attempts = newAttempts),
+                    result = Result.failure(DomainError.PermissionDenied(reason))
+                )
+            }
+            com.kfilesync.mobile.domain.service.PinVerdict.Expired -> PinVerdictOutcome(
+                session = copy(status = PairingStatus.Expired),
+                result = Result.failure(DomainError.InvalidStateTransition("session expired"))
+            )
+            com.kfilesync.mobile.domain.service.PinVerdict.MaxAttemptsExceeded -> PinVerdictOutcome(
+                session = copy(status = PairingStatus.Failed),
+                result = Result.failure(DomainError.PermissionDenied("max attempts exceeded"))
+            )
         }
-
-        return if (candidate.digits == pin.digits) {
-            Result.success(current.copy(status = PairingStatus.Succeeded))
-        } else {
-            val nextAttempts = (current.attemptsRemaining - 1).coerceAtLeast(0)
-            val reason = if (nextAttempts == 0) "max attempts exceeded"
-            else "wrong PIN; $nextAttempts attempt(s) remaining"
-            Result.failure(DomainError.PermissionDenied(reason))
-        }
-    }
-
-    /**
-     * Persist the wrong-PIN side effect - decrement the counter and flip to
-     * Failed when it hits zero. Called by the application service when it
-     * wants to write the failed attempt back to the repository.
-     */
-    fun decrementAttempt(): PairingSession {
-        if (!isOpen) return this
-        val next = attemptsRemaining - 1
-        return if (next <= 0) copy(attemptsRemaining = 0, status = PairingStatus.Failed)
-        else copy(attemptsRemaining = next)
     }
 
     companion object {
         const val MAX_ATTEMPTS: Int = 3
         val DEFAULT_TTL: Duration = 5.minutes
-
-        /**
-         * Factory: a pristine pending session. The PIN, nonce, and session id
-         * are caller-supplied so unit tests can be deterministic.
-         */
-        fun newPending(
-            sessionId: String,
-            peerDeviceId: DeviceId,
-            direction: PairingDirection,
-            pin: PairingCode,
-            nonce: Nonce,
-            peerFingerprint: Fingerprint,
-            peerAlias: String,
-            peerPlatform: DevicePlatform,
-            createdAt: Instant,
-            ttl: Duration = DEFAULT_TTL
-        ): PairingSession = PairingSession(
-            sessionId = sessionId,
-            peerDeviceId = peerDeviceId,
-            direction = direction,
-            pin = pin,
-            nonce = nonce,
-            peerFingerprint = peerFingerprint,
-            peerAlias = peerAlias,
-            peerPlatform= peerPlatform,
-            expiry = SessionExpiry(createdAt + ttl),
-            createdAt = createdAt
-        )
-
-        /** Build a session whose `createdAt` defaults to `Clock.System.now()`. */
-        fun newPendingNow(
-            sessionId: String,
-            peerDeviceId: DeviceId,
-            direction: PairingDirection,
-            pin: PairingCode,
-            nonce: Nonce,
-            peerFingerprint: Fingerprint,
-            peerAlias: String,
-            peerPlatform: DevicePlatform,
-            ttl: Duration = DEFAULT_TTL
-        ): PairingSession = newPending(
-            sessionId = sessionId,
-            peerDeviceId = peerDeviceId,
-            direction = direction,
-            pin = pin,
-            nonce = nonce,
-            peerFingerprint = peerFingerprint,
-            peerAlias = peerAlias,
-            peerPlatform= peerPlatform,
-            createdAt = Clock.System.now(),
-            ttl = ttl
-        )
     }
 }

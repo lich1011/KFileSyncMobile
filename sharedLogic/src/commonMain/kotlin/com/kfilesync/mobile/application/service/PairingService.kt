@@ -18,9 +18,12 @@ import com.kfilesync.mobile.domain.model.Nonce
 import com.kfilesync.mobile.domain.model.PairingCode
 import com.kfilesync.mobile.domain.model.PairingDirection
 import com.kfilesync.mobile.domain.model.PairingSession
+import com.kfilesync.mobile.domain.model.SessionExpiry
 import com.kfilesync.mobile.domain.port.DeviceRepository
 import com.kfilesync.mobile.domain.port.EventBus
 import com.kfilesync.mobile.domain.port.PairingRequestRepository
+import com.kfilesync.mobile.domain.service.PairingSessionState
+import com.kfilesync.mobile.domain.service.PairingStateMachine
 import com.kfilesync.mobile.infrastructure.crypto.SecureRng
 import com.kfilesync.mobile.infrastructure.crypto.nextHex
 import com.kfilesync.mobile.infrastructure.crypto.nextIntBelow
@@ -38,28 +41,28 @@ import kotlin.time.Instant
  * - `/pair/request` carries identity + fingerprint, NOT a PIN.
  * - User reads each side's PIN to the other (the OOB channel).
  * - `/pair/confirm` carries the PIN the originator *typed* (= the PIN the
- *   peer displayed). The peer validates against its own locally-stored PIN.
+ *   *peer displayed). The peer validates against its own locally-stored PIN.
  *
  * The previous design had the originator send its PIN to the peer in
  * `/pair/request`, which meant anyone who could POST to the peer could set
  * the expected PIN - bypassing the OOB user step entirely.
  *
  * Phase 1 happy path (outgoing, this device initiates):
- * 1. `initiateOutgoing(peer)` -> generate OUR PIN (displayed on this device),
- *    persist a PairingSession (direction = Outgoing). POST `/pair/request`
- *    to the peer; peer creates its own session with its own PIN.
+ * 1. `initiateOutgoing(peer)` - generate OUR PIN (displayed on this device),
+ * persist a PairingSession (direction = Outgoing). POST `/pair/request`
+ * to the peer; peer creates its own session with its own PIN.
  * 2. User reads peer's PIN to us and we type it. `submitOutgoingConfirm`
- *    POSTs `/pair/confirm` to the peer with that typed PIN; peer
- *    validates against its own stored PIN. On success the peer echoes
- *    its cert PEM, we record the peer as Paired.
+ * POSTs `/pair/confirm` to the peer with that typed PIN; peer
+ * validates against its own stored PIN. On success the peer echoes
+ * its cert PEM, we record the peer as Paired.
  *
  * Happy path (incoming):
  * 1. `/pair/request` lands -> `receiveIncoming` generates OUR PIN and
- *    persists a session (direction = Incoming).
+ * persists a session (direction = Incoming).
  * 2. User reads our PIN to the originator; originator's `/pair/confirm`
- *    lands -> `confirmIncoming` validates the supplied PIN against our
- *    session's PIN. On match we record the originator as Paired and
- *    echo our cert PEM.
+ * lands -> `confirmIncoming` validates the supplied PIN against our
+ * session's PIN. On match we record the originator as Paired and
+ * echo our cert PEM.
  *
  * Both directions reach the same final state:
  * - peer recorded as `DeviceState.Paired(certificatePem = peerCert)`
@@ -81,7 +84,8 @@ class PairingService(
     private val clock: () -> Instant = { Clock.System.now() },
     private val pinGenerator: () -> PairingCode = { generateSecurePin() },
     private val nonceGenerator: () -> Nonce = { generateSecureNonce() },
-    private val sessionIdGenerator: () -> String = { generateSecureSessionId() }
+    private val sessionIdGenerator: () -> String = { generateSecureSessionId() },
+    private val stateMachine: PairingStateMachine = PairingStateMachine()
 ) {
 
     /**
@@ -93,16 +97,40 @@ class PairingService(
     suspend fun initiateOutgoing(peer: PairingTarget): PairingSession {
         pairingRepo.cleanupExpired(now = clock())
         val local = localIdentityProvider.current()
-        val session = PairingSession.newPending(
-            sessionId = sessionIdGenerator(),
+        val sessionId = sessionIdGenerator()
+        val nonce = nonceGenerator()
+        val pin = pinGenerator()
+        val now = clock()
+        // Delegates to core's trust::pairing_state::start_outbound for the
+        // state-machine fields (expiry/attempts) - core's PreparedRequest
+        // half of the result is intentionally discarded, see
+        // PairingStateMachine's doc comment.
+        val state = stateMachine.startOutbound(
+            requestId = sessionId,
+            nonce = nonce.value,
+            targetDeviceId = peer.deviceId.value,
+            fromDeviceId = local.deviceId.value,
+            fromAlias = local.alias,
+            fromPlatform = local.platform.toWire(),
+            fromFingerprintHex = local.fingerprint.hex,
+            ourPin = pin.digits,
+            maxAttempts = PairingSession.MAX_ATTEMPTS,
+            nowMs = now.toEpochMilliseconds(),
+            pinTtlMs = PairingSession.DEFAULT_TTL.inWholeMilliseconds
+        )
+        val session = PairingSession(
+            sessionId = sessionId,
             peerDeviceId = peer.deviceId,
             direction = PairingDirection.Outgoing,
-            pin = pinGenerator(),
-            nonce = nonceGenerator(),
+            pin = pin,
+            nonce = nonce,
             peerFingerprint = peer.fingerprint,
             peerAlias = peer.alias,
             peerPlatform = peer.platform,
-            createdAt = clock()
+            expiry = SessionExpiry(Instant.fromEpochMilliseconds(state.expiresAtMs)),
+            attempts = state.attempts,
+            maxAttempts = state.maxAttempts,
+            createdAt = now
         )
         pairingRepo.save(session)
         Napier.i(message = "initiated outgoing pair session=${session.sessionId} peer=${peer.alias}")
@@ -134,17 +162,29 @@ class PairingService(
      */
     suspend fun receiveIncoming(request: PairRequestDto): PairingSession {
         pairingRepo.cleanupExpired(now = clock())
-        val session = PairingSession.newPending(
+        val pin = pinGenerator()
+        val now = clock()
+        val state = stateMachine.receiveIncoming(
+            requestId = request.requestId,
+            fromDeviceId = request.fromDeviceId,
+            ourPin = pin.digits,
+            maxAttempts = PairingSession.MAX_ATTEMPTS,
+            nowMs = now.toEpochMilliseconds(),
+            pinTtlMs = PairingSession.DEFAULT_TTL.inWholeMilliseconds
+        )
+        val session = PairingSession(
             sessionId = request.requestId,
             peerDeviceId = DeviceId(value = request.fromDeviceId),
             direction = PairingDirection.Incoming,
-            pin = pinGenerator(),
+            pin = pin,
             nonce = Nonce(value = request.nonce),
             peerFingerprint = Fingerprint(hex = request.fromFingerprint),
             peerAlias = request.fromAlias,
             peerPlatform = DevicePlatform.fromWire(value = request.fromPlatform),
-            createdAt = clock(),
-            ttl = PairingSession.DEFAULT_TTL
+            expiry = SessionExpiry(Instant.fromEpochMilliseconds(state.expiresAtMs)),
+            attempts = state.attempts,
+            maxAttempts = state.maxAttempts,
+            createdAt = now
         )
         pairingRepo.save(session)
         Napier.i(message = "received incoming pair session=${session.sessionId} from=${request.fromAlias}")
@@ -188,8 +228,8 @@ class PairingService(
         )
 
         return if (resp.accepted && resp.peerCertificatePem != null) {
-            val peerCert = resp.peerCertificatePem
-            val succeeded = current.copy(status = com.kfilesync.mobile.domain.model.PairingStatus.Succeeded)
+            val peerCert = resp.peerCertificatePem!!
+            val succeeded = current.copy(attempts = current.attempts + 1, status = com.kfilesync.mobile.domain.model.PairingStatus.Succeeded)
             pairingRepo.save(session = succeeded)
             writePairedDevice(session = succeeded, certPem = peerCert, peerAlias, peerPlatform)
             eventBus.publish(
@@ -201,8 +241,13 @@ class PairingService(
             Napier.i(message = "outgoing pair session=$sessionId succeeded; trust established")
             Result.success(value = Unit)
         } else {
-            // Persist decrement on PIN reject from peer.
-            pairingRepo.save(session = current.decrementAttempt())
+            // The peer rejected the PIN over HTTP - this device never verifies
+            // locally (that's the peer's job on its own session), it only
+            // tracks the failed-attempt count for retry/lockout bookkeeping.
+            val nextAttempts = current.attempts + 1
+            val next = if (nextAttempts >= current.maxAttempts) current.copy(attempts = nextAttempts, status = com.kfilesync.mobile.domain.model.PairingStatus.Failed)
+            else current.copy(attempts = nextAttempts)
+            pairingRepo.save(session = next)
             Result.failure(exception = DomainError.PermissionDenied(reason = resp.reason ?: "wrong PIN"))
         }
     }
@@ -220,7 +265,6 @@ class PairingService(
                 result = Result.failure(exception = DomainError.PermissionDenied(reason = "unknown pairing session")),
                 ourCertPem = null
             )
-
         val now = clock()
         val candidate = runCatching { PairingCode(digits = body.pin) }.getOrElse {
             return IncomingConfirmOutcome(
@@ -229,10 +273,24 @@ class PairingService(
             )
         }
 
-        val outcome = session.submitPin(candidate, now)
-        return if (outcome.isSuccess) {
-            val succeeded = outcome.getOrThrow()
-            pairingRepo.save(session = succeeded)
+        val current = session.expireIfNeeded(now)
+        if (!current.isOpen) {
+            pairingRepo.save(session = current)
+            return IncomingConfirmOutcome(
+                result = Result.failure(exception = DomainError.InvalidStateTransition(reason = "session ${current.status}")),
+                ourCertPem = null
+            )
+        }
+
+        val (state, verdict) = stateMachine.verifyPeerPin(
+            session = current.toStateMachineState(),
+            providedPin = candidate.digits,
+            nowMs = now.toEpochMilliseconds()
+        )
+        val outcome = current.applyVerdict(verdict, newAttempts = state.attempts)
+        pairingRepo.save(session = outcome.session)
+        return if (outcome.result.isSuccess) {
+            val succeeded = outcome.session
             // Use the cert PEM + alias/platform captured at receiveIncoming()
             // time and persisted on the session - PairConfirmDto no longer
             // carries them (fixes issue #12 - was hardcoded "Peer").
@@ -252,8 +310,7 @@ class PairingService(
                 ourCertPem = local.certificatePem
             )
         } else {
-            pairingRepo.save(session.expireIfNeeded(now).let { if (it.isOpen) it.decrementAttempt() else it })
-            IncomingConfirmOutcome(result = outcome.map { Unit }, ourCertPem = null)
+            IncomingConfirmOutcome(result = outcome.result, ourCertPem = null)
         }
     }
 
@@ -276,7 +333,6 @@ class PairingService(
                 )
             )
         }
-
         deviceRepo.updateTrustStatus(deviceId, status = com.kfilesync.mobile.domain.model.TrustStatus.Revoked)
         eventBus.publish(event = TrustRevoked(deviceId = deviceId))
         Napier.i(message = "revoked trust for ${existing.alias} (${deviceId.value})")
@@ -306,7 +362,9 @@ class PairingService(
             platform = peerPlatform,           // fixes #13: was hardcoded Linux
             deviceType = inferDeviceType(peerPlatform),
             addresses = addresses,
-            state = DeviceState.Paired(certificatePem = certPem, pairedAt = now)
+            state = DeviceState.Paired,
+            pairedAt = now,
+            certificatePem = certPem
         )
         deviceRepo.save(device)
         deviceRepo.updateTrustStatus(session.peerDeviceId, status = com.kfilesync.mobile.domain.model.TrustStatus.Paired)
@@ -316,6 +374,15 @@ class PairingService(
         DevicePlatform.Android, DevicePlatform.IOS -> DeviceType.Mobile
         DevicePlatform.Windows, DevicePlatform.MacOS, DevicePlatform.Linux -> DeviceType.Desktop
     }
+
+    private fun PairingSession.toStateMachineState(): PairingSessionState = PairingSessionState(
+        requestId = sessionId,
+        targetDeviceId = peerDeviceId.value,
+        ourPin = pin.digits,
+        expiresAtMs = expiry.expiresAt.toEpochMilliseconds(),
+        attempts = attempts,
+        maxAttempts = maxAttempts
+    )
 }
 
 /**
@@ -338,7 +405,7 @@ data class IncomingConfirmOutcome(
     val ourCertPem: String?
 )
 
-// ---------- secure random helpers ----------
+// --------- secure random helpers ---------
 
 private fun generateSecurePin(): PairingCode {
     val n = SecureRng.nextIntBelow(bound = 1_000_000)

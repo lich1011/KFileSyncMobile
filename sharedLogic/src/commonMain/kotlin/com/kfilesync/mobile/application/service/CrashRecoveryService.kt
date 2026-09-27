@@ -75,18 +75,20 @@ class CrashRecoveryService(
         val now = clock()
         for (job in incomplete) {
             when (val state = job.state) {
-                is TransferState.Verifying -> {
+                TransferState.Verifying -> {
                     // Demote to Active so the resume-skipChunks logic on the
                     // sender side can repopulate the verifier when the last
                     // chunk re-arrives. Persist the demoted state.
                     //
                     // chunksDone is recomputed from the sum of per-item
                     // checkpoints - that's the only honest value we have
-                    // post-restart (the aggregate's 'chunksDone' field on
-                    // Active is not persisted; see SqlDelightTransferRepo).
+                    // post-restart (TransferJob.chunksDone is not presisted;
+                    // see SqlDelightTransferRepo).
                     val chunksDone = job.items.sumOf { it.checkpoint.chunksDone }
                     val demoted = job.copy(
-                        state = TransferState.Active(startedAt = now, chunksDone = chunksDone),
+                        state = TransferState.Active,
+                        startedAt = now,
+                        chunksDone = chunksDone,
                         updatedAt = now
                     )
                     runCatching { transferRepository.saveJob(demoted) }
@@ -94,11 +96,11 @@ class CrashRecoveryService(
                     resumed += 1
                 }
 
-                is TransferState.Active, is TransferState.Paused -> {
+                TransferState.Active, TransferState.Paused, TransferState.Requested -> {
                     resumed += 1
                 }
 
-                is TransferState.Pending -> {
+                TransferState.Pending -> {
                     val ageMs = now.toEpochMilliseconds() - job.createdAt.toEpochMilliseconds()
                     if (ageMs > STALE_PENDING_MS) {
                         runCatching { transferRepository.delete(job.id) }
