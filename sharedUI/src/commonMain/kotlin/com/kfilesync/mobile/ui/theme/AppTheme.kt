@@ -1,134 +1,180 @@
 package com.kfilesync.mobile.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * App-wide Material 3 colour scheme + typography (Phase 6 T6.1).
+ * Google Material You (Material 3) Design Language Theme.
  *
- * The seed colour is indigo; the full M3 token surface roles are now
- * spelled out (tertiary, error, container variants) so cards, banners and
- * dialogs all pick up appropriate contrast in both light and dark themes
- * without each composable hand-picking colours.
- *
- * Typography uses the M3 defaults but slightly tightens line heights and
- * lifts the title weight to SemiBold to feel less generic. Body-* sizes
- * stay at the defaults so OS text-scaling (accessibility) keeps working.
- *
- * Note on Material You: see [resolveColorScheme] for why we currently
- * stick with the static palette on both platforms.
+ * Implements a modern, airy light color scheme featuring:
+ * - Dynamic pastel tonal palette (Material You Core Blue & Slate tones)
+ * - Tonal elevation hierarchy (surfaceContainerLowest, Low, Container, High)
+ * - Expressive typography scale with clear hierarchy and comfortable reading rhythm
+ * - Standard Material 3 squircle & pill shape geometry
  */
 
-// ---- Light scheme (Material 3 baseline + KFileSync indigo seed) ----
+// ---- Light scheme (Material You / M3 Light Tonal Palette) ----
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF4F46E5),
+    primary = Color(0xFF285EA7),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFE0E7FF),
-    onPrimaryContainer = Color(0xFF1E1B4B),
-    secondary = Color(0xFF06B6D4),
+    primaryContainer = Color(0xFFD6E3FF),
+    onPrimaryContainer = Color(0xFF001B3E),
+    inversePrimary = Color(0xFFA8C8FF),
+
+    secondary = Color(0xFF555F71),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFCFFAFE),
-    onSecondaryContainer = Color(0xFF164E63),
-    tertiary = Color(0xFF7C3AED), // violet-600 - accents for badges
+    secondaryContainer = Color(0xFFD9E3F8),
+    onSecondaryContainer = Color(0xFF121C2B),
+
+    tertiary = Color(0xFF6F5675),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFEDE9FE),
-    onTertiaryContainer = Color(0xFF4C1D95),
-    error = Color(0xFFDC2626),
+    tertiaryContainer = Color(0xFFF9D8FD),
+    onTertiaryContainer = Color(0xFF28132E),
+
+    error = Color(0xFFBA1A1A),
     onError = Color.White,
-    errorContainer = Color(0xFFFEE2E2),
-    onErrorContainer = Color(0xFF7F1D1D),
-    surface = Color(0xFFFAFAFA),
-    onSurface = Color(0xFF171717),
-    surfaceVariant = Color(0xFFE5E5E5),
-    onSurfaceVariant = Color(0xFF404040),
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002),
+
+    surface = Color(0xFFFBF8FD),
+    onSurface = Color(0xFF191C20),
+    surfaceVariant = Color(0xFFE0E2EC),
+    onSurfaceVariant = Color(0xFF44474F),
+
     surfaceContainerLowest = Color.White,
-    surfaceContainerLow = Color(0xFFF5F5F5),
-    surfaceContainer = Color(0xFFF5F5F5),
-    surfaceContainerHigh = Color(0xFFE5E5E5),
-    surfaceContainerHighest = Color(0xFFD4D4D4),
-    background = Color(0xFFFFFFFF),
-    onBackground = Color(0xFF171717),
-    outline = Color(0xFF737373),
-    outlineVariant = Color(0xFFE5E5E5)
+    surfaceContainerLow = Color(0xFFF5F3F7),
+    surfaceContainer = Color(0xFFEFECEF),
+    surfaceContainerHigh = Color(0xFFE9E6EB),
+    surfaceContainerHighest = Color(0xFFE3E1E6),
+
+    background = Color(0xFFFBF8FD),
+    onBackground = Color(0xFF191C20),
+    outline = Color(0xFF74777F),
+    outlineVariant = Color(0xFFC4C6D0)
 )
 
-// ---- Dark scheme - paired tones, AA contrast on every onX role ----
+// ---- Dark scheme (M3 paired tones with AA contrast) ----
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFA5B4FC),
-    onPrimary = Color(0xFF1E1B4B),
-    primaryContainer = Color(0xFF312E81),
-    onPrimaryContainer = Color(0xFFE0E7FF),
-    secondary = Color(0xFF22D3EE),
-    onSecondary = Color(0xFF083344),
-    secondaryContainer = Color(0xFF164E63),
-    onSecondaryContainer = Color(0xFFCFFAFE),
-    tertiary = Color(0xFFC4B5FD),
-    onTertiary = Color(0xFF2E1065),
-    tertiaryContainer = Color(0xFF4C1D95),
-    onTertiaryContainer = Color(0xFFEDE9FE),
-    error = Color(0xFFF87171),
-    onError = Color(0xFF450A0A),
-    errorContainer = Color(0xFF7F1D1D),
-    onErrorContainer = Color(0xFFFEE2E2),
-    surface = Color(0xFF171717),
-    onSurface = Color(0xFFE5E5E5),
-    surfaceVariant = Color(0xFF262626),
-    onSurfaceVariant = Color(0xFFD4D4D4),
-    surfaceContainerLowest = Color(0xFF0A0A0A),
-    surfaceContainerLow = Color(0xFF171717),
-    surfaceContainer = Color(0xFF262626),
-    surfaceContainerHigh = Color(0xFF404040),
-    surfaceContainerHighest = Color(0xFF525252),
-    background = Color(0xFF171717),
-    onBackground = Color(0xFFE5E5E5),
-    outline = Color(0xFF737373),
-    outlineVariant = Color(0xFF404040)
+    primary = Color(0xFFA8C8FF),
+    onPrimary = Color(0xFF003062),
+    primaryContainer = Color(0xFF004689),
+    onPrimaryContainer = Color(0xFFD6E3FF),
+    inversePrimary = Color(0xFF285EA7),
+
+    secondary = Color(0xFFBDC7DC),
+    onSecondary = Color(0xFF273141),
+    secondaryContainer = Color(0xFF3D4758),
+    onSecondaryContainer = Color(0xFFD9E3F8),
+
+    tertiary = Color(0xFFDCBCE1),
+    onTertiary = Color(0xFF3F2845),
+    tertiaryContainer = Color(0xFF563E5C),
+    onTertiaryContainer = Color(0xFFF9D8FD),
+
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+
+    surface = Color(0xFF111318),
+    onSurface = Color(0xFFE2E2E9),
+    surfaceVariant = Color(0xFF44474F),
+    onSurfaceVariant = Color(0xFFC4C6D0),
+
+    surfaceContainerLowest = Color(0xFF0C0E13),
+    surfaceContainerLow = Color(0xFF191C20),
+    surfaceContainer = Color(0xFF1D2024),
+    surfaceContainerHigh = Color(0xFF272A2F),
+    surfaceContainerHighest = Color(0xFF32353A),
+
+    background = Color(0xFF111318),
+    onBackground = Color(0xFFE2E2E9),
+    outline = Color(0xFF8E9099),
+    outlineVariant = Color(0xFF44474F)
 )
 
-// ---- Typography overrides ----
+// ---- Material You Shape Hierarchy ----
+val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(4.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp)
+)
+
+// ---- Material 3 Typography Scale ----
 private val AppTypography: Typography
     get() {
         val base = Typography()
         return base.copy(
-            // Headline/title roles: slightly heavier weight for hierarchy.
+            headlineMedium = base.headlineMedium.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 28.sp,
+                lineHeight = 36.sp,
+                letterSpacing = (-0.2).sp
+            ),
             headlineSmall = base.headlineSmall.copy(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 24.sp,
                 lineHeight = 32.sp
             ),
-            titleLarge = base.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-            titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            titleSmall = base.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            // Label small - used by the trust-status pill; bump it 1sp so it
-            // doesn't disappear inside the rounded background.
+            titleLarge = base.titleLarge.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 20.sp,
+                lineHeight = 26.sp
+            ),
+            titleMedium = base.titleMedium.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                lineHeight = 24.sp
+            ),
+            titleSmall = base.titleSmall.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            ),
+            bodyLarge = base.bodyLarge.copy(
+                fontSize = 16.sp,
+                lineHeight = 24.sp
+            ),
+            bodyMedium = base.bodyMedium.copy(
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            ),
+            bodySmall = base.bodySmall.copy(
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            ),
+            labelLarge = base.labelLarge.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            ),
+            labelMedium = base.labelMedium.copy(
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            ),
             labelSmall = base.labelSmall.copy(
                 fontWeight = FontWeight.Medium,
-                letterSpacing = 0.4.sp
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 0.5.sp
             )
         )
     }
 
-/**
- * Resolve the colour scheme for the current platform.
- *
- * Phase 6 (T6.1) keeps the resolver in `commonMain` so we don't need a
- * platform-specific source set just for theming. Android 12+ Material You
- * (`dynamicLightColorScheme(context)`) lives in `androidx.compose.material3`,
- * but the project uses the Compose Multiplatform `material3` artefact which
- * doesn't ship those helpers - wiring them in would require either a JVM-side
- * companion module or pulling a second material3 artefact. The KFileSync
- * indigo palette is part of the brand identity, so we deliberately keep the
- * static palette across both platforms; a future post-beta iteration can
- * introduce a platform expect/actual seam if the user research justifies it.
- */
 private fun resolveColorScheme(darkTheme: Boolean): ColorScheme =
     if (darkTheme) DarkColors else LightColors
 
@@ -140,21 +186,39 @@ fun AppTheme(
     MaterialTheme(
         colorScheme = resolveColorScheme(darkTheme),
         typography = AppTypography,
+        shapes = AppShapes,
         content = content
     )
 }
 
 /**
- * Convenience accessor for screens that want to reference the canonical
- * KFileSync palette directly (e.g. semantic success / warning colours that
- * don't have an M3 role). These read off MaterialTheme so they still flip
- * with the dark-mode toggle.
+ * Material You extended semantic palette for statuses and accent highlights.
  */
 object AppPalette {
-    /** Success / online - tailwind emerald-500 / -400 depending on theme. */
     val success: Color
-        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF34D399) else Color(0xFF10B981)
-    /** Warning - amber-500 / -400. */
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF6DD58C) else Color(0xFF198754)
+
+    val successContainer: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF005322) else Color(0xFFD1E7DD)
+
+    val onSuccessContainer: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF8CF8A8) else Color(0xFF0F5132)
+
     val warning: Color
-        @Composable get() = if (isSystemInDarkTheme()) Color(0xFFFBBF24) else Color(0xFFF59E0B)
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFFFFB951) else Color(0xFFD97706)
+
+    val warningContainer: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF5F3A00) else Color(0xFFFEF3C7)
+
+    val onWarningContainer: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFFFFDDB3) else Color(0xFF92400E)
+
+    val info: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF82B1FF) else Color(0xFF0D6EFD)
+
+    val infoContainer: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF003F8A) else Color(0xFFCFE2FF)
+
+    val cardBorder: Color
+        @Composable get() = if (isSystemInDarkTheme()) Color(0xFF33363D) else Color(0xFFE5E7EB)
 }

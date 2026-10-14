@@ -9,14 +9,20 @@ import com.kfilesync.mobile.application.service.HeartbeatService
 import com.kfilesync.mobile.application.service.ManualIpProbe
 import com.kfilesync.mobile.application.service.OnlineState
 import com.kfilesync.mobile.application.service.PairingSessionDescriptor
+import com.kfilesync.mobile.domain.event.PairingCompleted
+import com.kfilesync.mobile.domain.event.PairingRequestReceived
 import com.kfilesync.mobile.domain.model.Device
+import com.kfilesync.mobile.domain.model.DeviceAddress
 import com.kfilesync.mobile.domain.model.DeviceId
+import com.kfilesync.mobile.domain.model.Fingerprint
 import com.kfilesync.mobile.domain.port.DiscoveredDevice
+import com.kfilesync.mobile.domain.port.EventBus
 import io.github.aakira.napier.Napier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -40,7 +46,8 @@ class DevicesViewModel(
     private val discoveryCoordinator: DiscoveryCoordinator,
     private val heartbeatService: HeartbeatService,
     private val manualIpProbe: ManualIpProbe,
-    private val localIdentityProvider: LocalIdentityProvider
+    private val localIdentityProvider: LocalIdentityProvider,
+    private val eventBus: EventBus
 ) : ViewModel() {
 
     private val _pairingUi = MutableStateFlow<PairingUiState>(PairingUiState.Idle)
@@ -63,6 +70,39 @@ class DevicesViewModel(
         ) { paired, discovered, presence, pairing ->
             buildState(paired, discovered, presence, pairing)
         }.onEach { _uiState.value = it }.launchIn(viewModelScope)
+
+        eventBus.events()
+            .filter { it is PairingRequestReceived || it is PairingCompleted }
+            .onEach { event ->
+                when (event) {
+                    is PairingRequestReceived -> {
+                        val discPeer = discoveryCoordinator.devices.value.find { it.deviceId == event.peerDeviceId }
+                            ?: DiscoveredDevice(
+                                deviceId = event.peerDeviceId,
+                                alias = event.peerAlias,
+                                platform = event.peerPlatform,
+                                fingerprint = Fingerprint(event.peerFingerprint),
+                                addresses = event.peerAddress?.let { listOf(DeviceAddress(host = it, port = 53317)) } ?: emptyList()
+                            )
+                        _pairingUi.value = PairingUiState.AwaitingPin(
+                            target = discPeer,
+                            descriptor = PairingSessionDescriptor(
+                                sessionId = event.sessionId,
+                                pin = event.pin,
+                                expiresAtEpochMs = event.expiresAtEpochMs
+                            )
+                        )
+                    }
+                    is PairingCompleted -> {
+                        deviceService.refreshPaired()
+                        val current = _pairingUi.value
+                        if (current is PairingUiState.AwaitingPin && current.target.deviceId == event.peerDevice) {
+                            _pairingUi.value = PairingUiState.Succeeded(current.target)
+                        }
+                    }
+                }
+            }
+            .launchIn(viewModelScope)
     }
 
     // ---- UI actions ----
@@ -85,11 +125,9 @@ class DevicesViewModel(
     fun submitPin(pin: String) {
         val current = _pairingUi.value as? PairingUiState.AwaitingPin ?: return
         viewModelScope.launch {
-            // Pick the first reachable address from the discovery payload.
-            // The pinned HTTPS client below will reject the handshake if the
-            // peer's leaf cert doesn't match the fingerprint we recorded at
-            // discovery time (T1.4).
+            // Pick the first reachable address from the discovery payload or coordinator.
             val addr = current.target.addresses.firstOrNull()
+                ?: discoveryCoordinator.devices.value.find { it.deviceId == current.target.deviceId }?.addresses?.firstOrNull()
             if (addr == null) {
                 _pairingUi.value = PairingUiState.Failed(message = "No reachable address for ${current.target.alias}")
                 return@launch

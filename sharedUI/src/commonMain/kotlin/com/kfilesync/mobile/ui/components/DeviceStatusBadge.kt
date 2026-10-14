@@ -1,31 +1,32 @@
 package com.kfilesync.mobile.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.kfilesync.mobile.domain.model.TrustStatus
+import com.kfilesync.mobile.ui.theme.AppIcons
 import com.kfilesync.mobile.ui.theme.AppPalette
 import kfilesyncmobile.sharedui.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * Tiny pill-style badge representing a device's trust state.
- *
- * Colour scheme (Phase 6 polish):
- * - Discovered -> neutral surfaceVariant (read off MaterialTheme)
- * - Paired     -> emerald (theme-aware via [AppPalette.success])
- * - Revoked    -> MaterialTheme errorContainer (flips appropriately in dark)
- *
- * Accessibility: the visible text already conveys the state, so we only need
- * a brief content-description override when consumers wrap the badge in a
- * row with other text (avoids the screen reader saying "Paired Paired").
+ * Material You pill badge representing device trust status.
  */
 @Composable
 fun DeviceStatusBadge(status: TrustStatus, modifier: Modifier = Modifier) {
@@ -36,12 +37,12 @@ fun DeviceStatusBadge(status: TrustStatus, modifier: Modifier = Modifier) {
     }
     val (bg, fg) = when (status) {
         TrustStatus.Discovered -> Pair(
-            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.surfaceContainerHigh,
             MaterialTheme.colorScheme.onSurfaceVariant
         )
         TrustStatus.Paired -> Pair(
-            AppPalette.success.copy(alpha = 0.15f),
-            AppPalette.success
+            AppPalette.successContainer,
+            AppPalette.onSuccessContainer
         )
         TrustStatus.Revoked -> Pair(
             MaterialTheme.colorScheme.errorContainer,
@@ -49,36 +50,59 @@ fun DeviceStatusBadge(status: TrustStatus, modifier: Modifier = Modifier) {
         )
     }
     val statusDesc = stringResource(Res.string.devices_trust_status_desc, label)
-    Text(
-        text = label,
-        style = MaterialTheme.typography.labelSmall,
-        color = fg,
+
+    Row(
         modifier = modifier
-            .background(bg, shape = RoundedCornerShape(50))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .semantics { contentDescription = statusDesc }
-    )
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .semantics { contentDescription = statusDesc },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (status == TrustStatus.Paired) {
+            Icon(
+                imageVector = AppIcons.Check,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = fg
+        )
+    }
 }
 
 /**
- * Small coloured dot used to indicate live online status next to a device alias.
- * Uses the theme-aware [AppPalette.success] for online and the muted outline
- * colour for offline, so both states stay legible in dark mode.
- *
- * Accessibility: the dot is decorative on its own (no caller-supplied label),
- * but we attach a content description so blind users hear "online" / "offline"
- * when focusing the row.
+ * Material You status dot indicating live online presence.
+ * Features an inner dot with a subtle surrounding halo.
  */
 @Composable
 fun OnlineDot(online: Boolean, modifier: Modifier = Modifier) {
-    val color = if (online) AppPalette.success else MaterialTheme.colorScheme.outline
+    val color = if (online) AppPalette.success else MaterialTheme.colorScheme.outlineVariant
+    val haloColor = if (online) AppPalette.success.copy(alpha = 0.2f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
     val desc = if (online) stringResource(Res.string.devices_online) else stringResource(Res.string.devices_offline)
-    Text(
-        text = if (online) "\u25CF" /* ● */ else "\u25CB" /* ○ */,
-        color = color,
-        style = MaterialTheme.typography.labelLarge,
-        modifier = modifier.semantics {
-            contentDescription = desc
-        }
-    )
+
+    Box(
+        modifier = modifier
+            .size(12.dp)
+            .semantics { contentDescription = desc },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(haloColor)
+        )
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+    }
 }

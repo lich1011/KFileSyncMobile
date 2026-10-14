@@ -183,7 +183,8 @@ class TransferServiceImpl(
     private val fileSink: FileSink,
     private val chunkingStrategy: ChunkingStrategy,
     private val clock: () -> Instant = { Clock.System.now() },
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val discoveryCoordinator: DiscoveryCoordinator? = null
 ) : TransferAppService {
 
     private val transfers = MutableStateFlow<List<TransferRow>>(emptyList())
@@ -240,9 +241,17 @@ class TransferServiceImpl(
             )
         )
 
-        // 2. Spawn the upload coroutine - survives any UI rebind via [scope].
+        // 2. Resolve reachable address: fallback to discoveryCoordinator if peer addresses are not yet populated
+        val effectiveAddresses = peer.addresses.takeIf { it.isNotEmpty() }
+            ?: discoveryCoordinator?.devices?.value?.firstOrNull { it.deviceId == target }?.addresses?.takeIf { it.isNotEmpty() }
+            ?: emptyList()
+        if (effectiveAddresses.isNotEmpty() && peer.addresses.isEmpty()) {
+            deviceRepository.updateLastSeen(target, now, effectiveAddresses)
+        }
+
+        // Spawn the upload coroutine - survives any UI rebind via [scope].
         val handle = scope.launch {
-            runOutgoing(job, peer.addresses, peer.alias, files.associateBy { it.locator })
+            runOutgoing(job, effectiveAddresses, peer.alias, files.associateBy { it.locator })
         }
         outgoingJobs[jobId] = handle
 
@@ -598,6 +607,14 @@ class TransferServiceImpl(
                     totalFiles = job.totalFiles
                 )
             )
+        }
+
+        // Prepare receive session in memory so incoming chunks are accepted seamlessly
+        sessionsLock.withLock {
+            val s = sessions.getOrPut(jobId) {
+                ReceiveSession(jobId = jobId, targetDirectory = null)
+            }
+            s.userAccepted = true
         }
 
         // Note: we *accept* eagerly for resume (existing != null) so a re-request

@@ -68,10 +68,28 @@ class AndroidDeviceIdentityProviderImpl : DeviceIdentityProvider {
             val ks = androidKeyStore()
             val ksAlias = AndroidKeyStoreAdapter.LOCAL_IDENTITY_ALIAS
             val cert = ks.getCertificate(ksAlias) as? X509Certificate
-            if (cert != null) {
+
+            val canSignNone = try {
+                val key = ks.getKey(ksAlias, null) as? PrivateKey
+                if (key != null) {
+                    val s = java.security.Signature.getInstance("NONEwithECDSA")
+                    s.initSign(key)
+                    true
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                false
+            }
+
+            if (cert != null && canSignNone) {
                 Napier.i("AndroidKeyStore: reusing existing local identity")
                 certToIdentity(cert)
             } else {
+                if (cert != null && !canSignNone) {
+                    Napier.w("AndroidKeyStore: existing key cannot do NONEwithECDSA (missing DIGEST_NONE for TLS); regenerating")
+                    runCatching { ks.deleteEntry(ksAlias) }
+                }
                 Napier.i("AndroidKeyStore: minting new local identity for alias=$alias")
                 val keyPair = generateKeyPair(ksAlias)
                 val freshCert = signSelfCert(alias = alias, keyPair = keyPair)
@@ -104,7 +122,12 @@ class AndroidDeviceIdentityProviderImpl : DeviceIdentityProvider {
             KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
         )
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
+            .setDigests(
+                KeyProperties.DIGEST_NONE,
+                KeyProperties.DIGEST_SHA256,
+                KeyProperties.DIGEST_SHA384,
+                KeyProperties.DIGEST_SHA512
+            )
             .setUserAuthenticationRequired(false) // Phase 1: no biometric gate; revisit in Phase 5.
             .build()
 

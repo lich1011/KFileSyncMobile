@@ -5,10 +5,17 @@ import com.kfilesync.mobile.domain.model.DeviceId
 import com.kfilesync.mobile.domain.port.DeviceRepository
 import com.kfilesync.mobile.domain.port.DiscoveredDevice
 import com.kfilesync.mobile.domain.port.EventBus
+import com.kfilesync.mobile.domain.event.PairingCompleted
+import com.kfilesync.mobile.domain.event.TrustRevoked
 import io.github.aakira.napier.Napier
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 
 /**
  * Driving port: device discovery & pairing use cases (design doc §6.2.1).
@@ -74,10 +81,20 @@ class DeviceServiceImpl(
     private val deviceRepository: DeviceRepository,
     private val pairingService: PairingService,
     private val discoveryCoordinator: DiscoveryCoordinator? = null,
-    @Suppress("unused") private val eventBus: EventBus
+    private val eventBus: EventBus
 ) : DeviceAppService {
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val paired = MutableStateFlow<List<Device>>(emptyList())
+
+    init {
+        scope.launch {
+            refreshPaired()
+            eventBus.events()
+                .filter { it is PairingCompleted || it is TrustRevoked }
+                .collect { refreshPaired() }
+        }
+    }
 
     override suspend fun discoverDevices(): List<DiscoveredDevice> =
         discoveryCoordinator?.devices?.value ?: emptyList()

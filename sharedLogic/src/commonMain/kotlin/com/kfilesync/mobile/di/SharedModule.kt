@@ -114,8 +114,17 @@ val sharedModule = module {
     }
 
     // ---- Application services ----
-    single { PairingService(get(), get(), get(), get(), get()) }
-    single { DiscoveryCoordinator(provider = get(), localIdentityProvider = get()) }
+    single { DiscoveryCoordinator(provider = get(), localIdentityProvider = get(), deviceRepository = get()) }
+    single {
+        PairingService(
+            pairingRepo = get(),
+            deviceRepo = get(),
+            eventBus = get(),
+            localIdentityProvider = get(),
+            httpClient = get(),
+            discoveryCoordinator = get()
+        )
+    }
     single { ManualIpProbe(httpClient = get<com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient>()) }
     single { HeartbeatService(deviceRepository = get(), httpClient = get()) }
     single<DeviceAppService> {
@@ -135,7 +144,8 @@ val sharedModule = module {
             localIdentityProvider = get(),
             fileSource = get(),
             fileSink = get(),
-            chunkingStrategy = get()
+            chunkingStrategy = get(),
+            discoveryCoordinator = get()
         )
     }
     single<ShareAppService> {

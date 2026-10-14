@@ -26,6 +26,21 @@ data class DeviceDiscovered(
     override val eventType = "device.discovered"
 }
 
+data class PairingRequestReceived(
+    val sessionId: String,
+    val peerDeviceId: DeviceId,
+    val peerAlias: String,
+    val peerPlatform: com.kfilesync.mobile.domain.model.DevicePlatform,
+    val peerFingerprint: String,
+    val peerAddress: String? = null,
+    val pin: String,
+    val expiresAtEpochMs: Long,
+    override val occurredAt: Instant = Clock.System.now(),
+    override val aggregateId: String = peerDeviceId.value
+) : DomainEvent {
+    override val eventType = "pairing.request_received"
+}
+
 data class PairingCompleted(
     val localDevice: DeviceId,
     val peerDevice: DeviceId,

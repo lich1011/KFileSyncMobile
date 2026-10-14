@@ -8,6 +8,7 @@ import io.github.aakira.napier.Napier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -27,7 +28,9 @@ import kotlinx.coroutines.sync.withLock
  */
 class DiscoveryCoordinator(
     private val provider: DiscoveryProvider,
-    private val localIdentityProvider: LocalIdentityProvider
+    private val localIdentityProvider: LocalIdentityProvider,
+    private val deviceRepository: com.kfilesync.mobile.domain.port.DeviceRepository? = null,
+    private val scope: kotlinx.coroutines.CoroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
 ) {
     private val mutex = Mutex()
     private val byId = linkedMapOf<String, DiscoveredDevice>()
@@ -60,6 +63,16 @@ class DiscoveryCoordinator(
             byId[peer.deviceId.value] = peer
             _devices.value = byId.values.toList()
             Napier.d("discovered ${peer.alias} (${peer.platform})")
+
+            // Automatically refresh reachable addresses for paired peers
+            if (deviceRepository != null && peer.addresses.isNotEmpty()) {
+                scope.launch {
+                    val known = deviceRepository.findById(peer.deviceId)
+                    if (known != null && known.state == com.kfilesync.mobile.domain.model.DeviceState.Paired) {
+                        deviceRepository.updateLastSeen(peer.deviceId, kotlin.time.Clock.System.now(), peer.addresses)
+                    }
+                }
+            }
         }
     }
 

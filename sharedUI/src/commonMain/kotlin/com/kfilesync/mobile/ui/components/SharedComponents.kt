@@ -1,38 +1,88 @@
 package com.kfilesync.mobile.ui.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kfilesyncmobile.sharedui.generated.resources.*
-import org.jetbrains.compose.resources.stringResource
+import com.kfilesync.mobile.ui.theme.AppIcons
+import com.kfilesync.mobile.ui.theme.AppPalette
 
 /**
- * Phase 6 (T6.1) shared UI primitives - small, theme-aware, accessible.
- *
- * These replace the per-screen `SectionTitle` / `EmptyHint` helpers that
- * were copy-pasted across every tab. Keeping them in one place means the
- * dark-mode palette + typography tweaks land everywhere at once.
+ * Material You (Material 3) Shared Components.
  */
 
 /**
- * Section header with a heading-role semantics annotation so screen readers
- * announce it as a heading. The 'count' argument, if non-null, renders a
- * subtle count suffix - used by lists ("Paired devices (3)").
+ * Top expressive page header adhering to Material 3 Large Title guidelines.
+ */
+@Composable
+fun AppHeader(
+    title: String,
+    subtitle: String? = null,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp, bottom = 4.dp)
+            .semantics { heading() }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            if (action != null) {
+                action()
+            }
+        }
+        if (!subtitle.isNullOrBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Material You Section Header with an optional tonal pill badge for count.
  */
 @Composable
 fun SectionHeader(
@@ -43,30 +93,36 @@ fun SectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 4.dp)
+            .padding(top = 8.dp, bottom = 2.dp)
             .semantics { heading() },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f)
         )
         if (count != null) {
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = count.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
 
 /**
- * Lightweight empty-state hint - a one-line muted message used inside lists
- * when there's nothing to show. Designed to read as supplementary content
- * (no card, no border), so it sits naturally between section headers.
+ * Lightweight empty-state hint.
  */
 @Composable
 fun EmptyStateHint(
@@ -78,58 +134,110 @@ fun EmptyStateHint(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Start,
-        modifier = modifier.fillMaxWidth().padding(vertical = 6.dp)
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp)
     )
 }
 
 /**
- * A more prominent empty-state widget for whole-screen "you have nothing
- * here yet" moments. Used by the Sync and Transfers tabs when the user has
- * no shares or no transfers.
+ * Material You expressive empty state with a tonal icon circle, title, and body description.
  */
 @Composable
 fun EmptyStatePanel(
     title: String,
     body: String,
-    icon: String = stringResource(Res.string.transfers_empty_panel_icon),
+    icon: ImageVector? = null,
+    glyph: String? = null,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth().padding(vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     ) {
-        Text(text = icon, style = MaterialTheme.typography.headlineLarge)
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = body,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(60.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                if (icon != null) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(30.dp)
+                    )
+                } else {
+                    Text(
+                        text = glyph ?: "📁",
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                }
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
-/** Subtle horizontal divider with appropriate vertical breathing room. */
+/** Subtle horizontal divider. */
 @Composable
 fun SectionDivider(modifier: Modifier = Modifier) {
     Spacer(Modifier.height(4.dp))
     HorizontalDivider(
         thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.outlineVariant,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
         modifier = modifier
     )
     Spacer(Modifier.height(4.dp))
 }
 
 /**
- * Immutable display row for "key: value" lines (fingerprint card, device id
- * card). Stable type so callers can lift into LazyColumn keys without
- * worrying about recomposition stability.
+ * Standard Material You rounded card with subtle tonal styling.
+ */
+@Composable
+fun M3Card(
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLowest,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+    ) {
+        content()
+    }
+}
+
+/**
+ * Key-value row for identity verification.
  */
 @Immutable
 data class KeyValueRow(val label: String, val value: String)

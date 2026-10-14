@@ -25,6 +25,14 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        mavenLocal()
+        maven {
+            url = uri("https://maven.pkg.github.com/lich1011/KFileSyncCore")
+            credentials {
+                username = providers.environmentVariable("GITHUB_ACTOR").getOrElse("")
+                password = providers.environmentVariable("GITHUB_TOKEN").getOrElse("")
+            }
+        }
     }
 }
 

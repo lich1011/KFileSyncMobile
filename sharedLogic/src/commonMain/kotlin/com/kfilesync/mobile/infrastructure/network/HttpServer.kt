@@ -223,7 +223,7 @@ class HttpServer(
                         // definition not yet paired, so we can't gate on the device
                         // repo. The PIN exchange itself authenticates.
                         val body = WireCodec.decodePairRequest(call.receive<ByteArray>())
-                        svc.receiveIncoming(body)
+                        svc.receiveIncoming(body, call.request.local.remoteHost)
                         // Pending state per dto.rs; accepted=false, no cert/reason yet -
                         // the real accept/reject happens on /pair/confirm.
                         call.respondBytes(

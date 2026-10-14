@@ -7,6 +7,7 @@ import com.kfilesync.mobile.application.dto.PairRevokeDto
 import com.kfilesync.mobile.application.identity.LocalIdentityProvider
 import com.kfilesync.mobile.domain.DomainError
 import com.kfilesync.mobile.domain.event.PairingCompleted
+import com.kfilesync.mobile.domain.event.PairingRequestReceived
 import com.kfilesync.mobile.domain.event.TrustRevoked
 import com.kfilesync.mobile.domain.model.Device
 import com.kfilesync.mobile.domain.model.DeviceId
@@ -85,7 +86,8 @@ class PairingService(
     private val pinGenerator: () -> PairingCode = { generateSecurePin() },
     private val nonceGenerator: () -> Nonce = { generateSecureNonce() },
     private val sessionIdGenerator: () -> String = { generateSecureSessionId() },
-    private val stateMachine: PairingStateMachine = PairingStateMachine()
+    private val stateMachine: PairingStateMachine = PairingStateMachine(),
+    private val discoveryCoordinator: DiscoveryCoordinator? = null
 ) {
 
     /**
@@ -160,7 +162,7 @@ class PairingService(
      *
      * Generates OUR PIN locally - the originator never gets to set it.
      */
-    suspend fun receiveIncoming(request: PairRequestDto): PairingSession {
+    suspend fun receiveIncoming(request: PairRequestDto, remoteHost: String? = null): PairingSession {
         pairingRepo.cleanupExpired(now = clock())
         val pin = pinGenerator()
         val now = clock()
@@ -188,6 +190,18 @@ class PairingService(
         )
         pairingRepo.save(session)
         Napier.i(message = "received incoming pair session=${session.sessionId} from=${request.fromAlias}")
+        eventBus.publish(
+            event = PairingRequestReceived(
+                sessionId = session.sessionId,
+                peerDeviceId = session.peerDeviceId,
+                peerAlias = session.peerAlias,
+                peerPlatform = session.peerPlatform,
+                peerFingerprint = session.peerFingerprint.hex,
+                peerAddress = remoteHost,
+                pin = session.pin.digits,
+                expiresAtEpochMs = session.expiry.expiresAt.toEpochMilliseconds()
+            )
+        )
         return session
     }
 
@@ -213,6 +227,9 @@ class PairingService(
 
         val current = session.expireIfNeeded(now)
         if (!current.isOpen) {
+            if (current.status == com.kfilesync.mobile.domain.model.PairingStatus.Succeeded) {
+                return Result.success(Unit)
+            }
             pairingRepo.save(session = current)
             return Result.failure(exception = DomainError.InvalidStateTransition(reason = "session ${current.status}"))
         }
@@ -355,7 +372,12 @@ class PairingService(
         // Preserve any addresses already known for this device (e.g. from
         // discovery), so the heartbeat can immediately start pinging.
         val existing = deviceRepo.findById(session.peerDeviceId)
-        val addresses = existing?.addresses ?: emptyList()
+        val discoveredAddrs = discoveryCoordinator?.devices?.value
+            ?.firstOrNull { it.deviceId == session.peerDeviceId }
+            ?.addresses
+        val addresses = existing?.addresses?.takeIf { it.isNotEmpty() }
+            ?: discoveredAddrs?.takeIf { it.isNotEmpty() }
+            ?: emptyList()
         val device = Device(
             id = session.peerDeviceId,
             alias = peerAlias,

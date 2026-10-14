@@ -1,6 +1,9 @@
 package com.kfilesync.mobile.ui.screens.shares
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,42 +12,37 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kfilesync.mobile.application.service.ShareRow
 import com.kfilesync.mobile.domain.model.SharePermission
 import com.kfilesync.mobile.domain.model.ShareStatus
 import com.kfilesync.mobile.domain.model.SyncMode
+import com.kfilesync.mobile.ui.theme.AppIcons
+import com.kfilesync.mobile.ui.theme.AppPalette
 
 /**
- * Share detail screen (design doc §11.4, T3.6) - previously an unimplemented
- * placeholder.
- *
- * Presents everything carried in a [ShareRow] - name, status, sync mode,
- * permission, creator, member count, local mirror path, share id - plus the
- * same lifecycle actions as the list row (Pause / Resume / Leave) and a Back
- * affordance. Read-only when the share is in the `Left` (history) state.
- *
- * Uses plain string literals rather than `Res.string.*`: the generated
- * resource accessors only contain keys already declared in the resource XML,
- * so adding new `Res.string` references here would not compile until those
- * keys exist. Member-by-member and conflict-by-file breakdowns (the richest
- * part of the §11.4 mock) need additional `ShareAppService` queries (the full
- * "Share" aggregate with its "members", and `SyncAppService.observeConflicts`
- * filtered by share); that data plumbing is a follow-up.
+ * Material You Share Detail Screen.
  */
 @Composable
 fun ShareDetailScreen(
@@ -64,43 +62,123 @@ fun ShareDetailScreen(
             .padding(contentPadding)
             .padding(horizontal = 16.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
 
-        TextButton(onClick = onBack) { Text("\u2190 Back to shares") }
+        // Back action bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Icon(
+                    imageVector = AppIcons.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "Share details",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
 
-        Text(
-            text = "\uD83D\uDCC1 " + row.name,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold
-        )
-
+        // Hero card
         Card(
             modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = AppIcons.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = row.name,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(
+                                if (row.status == ShareStatus.Active) AppPalette.successContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHighest
+                            )
+                            .padding(horizontal = 10.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = statusText(row.status),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (row.status == ShareStatus.Active) AppPalette.onSuccessContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Detail items card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                DetailRow(label = "Status", value = statusText(row.status), valueColor = statusColor(row.status))
-                HorizontalDivider()
                 DetailRow(label = "Sync mode", value = syncModeText(row.syncMode))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 DetailRow(label = "Permission", value = permissionText(row.permission))
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 DetailRow(label = "Created by", value = row.createdByAlias)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 DetailRow(
                     label = "Members",
                     value = if (row.memberCount == 1) "1 member" else "${row.memberCount} members"
                 )
                 if (row.localPath.isNotBlank()) {
-                    HorizontalDivider()
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                     DetailRow(label = "Local folder", value = row.localPath)
                 }
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 DetailRow(label = "Share ID", value = row.shareId.value)
             }
         }
@@ -108,17 +186,42 @@ fun ShareDetailScreen(
         if (!readOnly) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 when (row.status) {
                     ShareStatus.Active ->
-                        OutlinedButton(onClick = onPause) { Text("Pause") }
+                        OutlinedButton(
+                            onClick = onPause,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(AppIcons.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Pause")
+                        }
                     ShareStatus.Paused ->
-                        OutlinedButton(onClick = onResume) { Text("Resume") }
-                    else -> { /* Pending is handled in the invitation card */ }
+                        OutlinedButton(
+                            onClick = onResume,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(AppIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Resume")
+                        }
+                    else -> { }
                 }
-                Button(onClick = onLeave) { Text("Leave share") }
+                Button(
+                    onClick = onLeave,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Leave share")
+                }
             }
         } else {
             Text(
@@ -138,13 +241,18 @@ private fun DetailRow(
     value: String,
     valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, color = valueColor)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = valueColor
+        )
     }
 }
 
@@ -153,13 +261,6 @@ private fun statusText(status: ShareStatus): String = when (status) {
     ShareStatus.Active -> "Active"
     ShareStatus.Paused -> "Paused"
     ShareStatus.Left -> "Left"
-}
-
-@Composable
-private fun statusColor(status: ShareStatus) = when (status) {
-    ShareStatus.Active -> MaterialTheme.colorScheme.primary
-    ShareStatus.Left -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.onSurface
 }
 
 private fun syncModeText(mode: SyncMode): String = when (mode) {

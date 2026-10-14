@@ -7,7 +7,10 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,12 +19,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -31,36 +41,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kfilesync.mobile.application.service.ShareRow
 import com.kfilesync.mobile.domain.model.SyncConflict
+import com.kfilesync.mobile.ui.components.AppHeader
+import com.kfilesync.mobile.ui.components.EmptyStatePanel
+import com.kfilesync.mobile.ui.components.SectionHeader
+import com.kfilesync.mobile.ui.theme.AppIcons
+import com.kfilesync.mobile.ui.theme.AppPalette
 import kfilesyncmobile.sharedui.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
-import com.kfilesync.mobile.ui.components.EmptyStateHint
-import com.kfilesync.mobile.ui.components.SectionHeader
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
- * Sync tab Composable (design doc §11.4, T4.9).
- *
- * Sections (top to bottom):
- * - Header + global status line (running / last synced / last error)
- * - Active shares with "Sync now" buttons
- * - Conflicts list (each with three resolution buttons)
- *
- * Phase 6 (T6.1) polish:
- * - The status banner uses [Crossfade] so flipping between Idle / Running /
- * Last-synced / Last-error doesn't jump-cut.
- * - Conflicts list collapses/expands via [AnimatedVisibility] when the
- * list goes from empty to non-empty (or vice versa) - a freshly
- * detected conflict slides in rather than appearing.
- * - Whole screen is a single LazyColumn for the same reasons as
- * Devices/Transfers (cheaper, virtualised).
- * - Conflict row gets a content description that includes the path so
- * TalkBack/VoiceOver announces *which* file is conflicting.
+ * Sync tab Composable adhering to Google Material You (Material 3).
  */
 @Composable
 fun SyncScreen(
@@ -74,19 +72,15 @@ fun SyncScreen(
             .fillMaxSize()
             .padding(contentPadding)
             .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // ---- Header ----
         item("header") {
-            Spacer(Modifier.height(8.dp))
-            Column {
-                Text(stringResource(Res.string.sync_title), style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    text = stringResource(Res.string.sync_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Spacer(Modifier.height(4.dp))
+            AppHeader(
+                title = stringResource(Res.string.sync_title),
+                subtitle = stringResource(Res.string.sync_subtitle)
+            )
         }
 
         // ---- Global status ----
@@ -94,11 +88,18 @@ fun SyncScreen(
 
         // ---- Per-share rows ----
         item("shares-header") {
-            SectionHeader(stringResource(Res.string.sync_section_active_shares), count = ui.shares.size)
+            SectionHeader(
+                title = stringResource(Res.string.sync_section_active_shares),
+                count = ui.shares.size
+            )
         }
         if (ui.shares.isEmpty()) {
             item("shares-empty") {
-                EmptyStateHint(stringResource(Res.string.sync_active_shares_empty))
+                EmptyStatePanel(
+                    title = stringResource(Res.string.sync_section_active_shares),
+                    body = stringResource(Res.string.sync_active_shares_empty),
+                    icon = AppIcons.Sync
+                )
             }
         } else {
             items(ui.shares, key = { "share-" + it.shareId.value }) { row ->
@@ -114,7 +115,10 @@ fun SyncScreen(
         // ---- Conflicts (animated section) ----
         if (ui.conflicts.isNotEmpty()) {
             item("conflicts-header") {
-                SectionHeader(stringResource(Res.string.sync_section_conflicts), count = ui.conflicts.size)
+                SectionHeader(
+                    title = stringResource(Res.string.sync_section_conflicts),
+                    count = ui.conflicts.size
+                )
             }
             items(ui.conflicts, key = { "conflict-${it.shareId.value}:${it.path}" }) { conflict ->
                 AnimatedVisibility(
@@ -138,11 +142,6 @@ fun SyncScreen(
     }
 }
 
-/**
- * Status banner reduces to one of four "mode" enum values. We hoist the
- * mode into [StatusMode] so [Crossfade] only triggers on the kind, not on
- * every text mutation inside running / idle.
- */
 private enum class StatusMode { Running, Failed, Idle, Synced }
 
 @Composable
@@ -155,60 +154,122 @@ private fun StatusBanner(ui: SyncUiState) {
             else -> StatusMode.Idle
         }
     }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = when (mode) {
                 StatusMode.Failed -> MaterialTheme.colorScheme.errorContainer
-                StatusMode.Running -> MaterialTheme.colorScheme.secondaryContainer
-                StatusMode.Synced -> MaterialTheme.colorScheme.primaryContainer
-                StatusMode.Idle -> MaterialTheme.colorScheme.surfaceVariant
+                StatusMode.Running -> MaterialTheme.colorScheme.primaryContainer
+                StatusMode.Synced -> AppPalette.successContainer
+                StatusMode.Idle -> MaterialTheme.colorScheme.surfaceContainerLow
             }
-        )
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     ) {
         Crossfade(targetState = mode, animationSpec = tween(220), label = "sync-status") { m ->
             Row(
-                modifier = Modifier.padding(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 when (m) {
                     StatusMode.Running -> {
                         CircularProgressIndicator(
-                            modifier = Modifier.height(20.dp).padding(2.dp),
-                            strokeWidth = 2.dp
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
                         )
-                        Text(stringResource(Res.string.sync_state_syncing), style = MaterialTheme.typography.bodyMedium)
-                    }
-                    StatusMode.Failed -> {
-                        Text(stringResource(Res.string.sync_glyph_warning), style = MaterialTheme.typography.titleMedium)
                         Column {
                             Text(
-                                stringResource(Res.string.sync_state_last_failed),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold
+                                text = stringResource(Res.string.sync_state_syncing),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "Exchanging metadata and version vectors",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                    StatusMode.Failed -> {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = stringResource(Res.string.sync_state_last_failed),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
                             )
                             Text(
                                 text = (ui.lastError ?: "").take(120),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
                             )
                         }
                     }
                     StatusMode.Synced -> {
-                        Text(
-                            stringResource(Res.string.sync_glyph_check),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            stringResource(Res.string.sync_state_last_synced, formatRelativeMs(ui.lastSyncedAt ?: 0L)),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(AppPalette.success.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Check,
+                                contentDescription = null,
+                                tint = AppPalette.success,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "All shares up to date",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AppPalette.onSuccessContainer
+                            )
+                            Text(
+                                text = stringResource(Res.string.sync_state_last_synced, formatRelativeMs(ui.lastSyncedAt ?: 0L)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AppPalette.onSuccessContainer.copy(alpha = 0.8f)
+                            )
+                        }
                     }
                     StatusMode.Idle -> {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Sync,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                         Text(
-                            stringResource(Res.string.sync_state_idle),
+                            text = stringResource(Res.string.sync_state_idle),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -236,16 +297,43 @@ private fun ShareSyncRow(
     } else {
         stringResource(Res.string.sync_member_count, row.memberCount)
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+    ) {
         Row(
-            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = AppIcons.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = stringResource(Res.string.shares_glyph_folder) + " ${row.name}",
-                    style = MaterialTheme.typography.titleSmall
+                    text = row.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = membersText,
@@ -253,22 +341,23 @@ private fun ShareSyncRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            // The button stays enabled when *another* share is syncing, so the
-            // user can queue the next sync - the service's per-(share, peer)
-            // gate prevents double-runs.
-            Button(
+
+            FilledTonalButton(
                 onClick = onSyncNow,
                 enabled = !busy,
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.semantics {
                     contentDescription = syncBtnDesc
                 }
             ) {
                 if (busy) {
                     CircularProgressIndicator(
-                        modifier = Modifier.height(16.dp).padding(2.dp),
+                        modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
                 } else {
+                    Icon(AppIcons.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text(stringResource(Res.string.sync_action_sync_now))
                 }
             }
@@ -284,43 +373,84 @@ private fun ConflictListItem(
     onKeepBoth: () -> Unit
 ) {
     val conflictDesc = stringResource(Res.string.sync_conflict_desc, conflict.path)
+
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer
-        )
+            containerColor = AppPalette.warningContainer
+        ),
+        border = BorderStroke(1.dp, AppPalette.warning.copy(alpha = 0.35f))
     ) {
         Column(
-            modifier = Modifier.padding(12.dp).semantics {
-                contentDescription = conflictDesc
-            },
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier
+                .padding(16.dp)
+                .semantics { contentDescription = conflictDesc },
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                text = stringResource(Res.string.sync_glyph_warning) + " ${conflict.path}",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onTertiaryContainer
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = AppIcons.Warning,
+                    contentDescription = null,
+                    tint = AppPalette.onWarningContainer,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = conflict.path,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = AppPalette.onWarningContainer
+                )
+            }
+
             Text(
                 text = stringResource(Res.string.sync_conflict_action_prompt),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onTertiaryContainer
+                color = AppPalette.onWarningContainer
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onKeepLocal) { Text(stringResource(Res.string.sync_action_keep_mine)) }
-                OutlinedButton(onClick = onKeepRemote) { Text(stringResource(Res.string.sync_action_keep_theirs)) }
-                OutlinedButton(onClick = onKeepBoth) { Text(stringResource(Res.string.sync_action_keep_both)) }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onKeepLocal,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        stringResource(Res.string.sync_action_keep_mine),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                OutlinedButton(
+                    onClick = onKeepRemote,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        stringResource(Res.string.sync_action_keep_theirs),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                OutlinedButton(
+                    onClick = onKeepBoth,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        stringResource(Res.string.sync_action_keep_both),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             }
         }
     }
 }
 
-/**
- * Roughly format "how long ago" from an epoch-ms timestamp.
- * We don't depend on kotlinx-datetime here (the project deliberately avoids
- * pulling it just for one screen); a coarse minutes/hours/days bucketing is
- * enough for an "at-a-glance" line.
- */
 @Composable
 private fun formatRelativeMs(epochMs: Long): String {
     if (epochMs <= 0L) return stringResource(Res.string.sync_time_just_now)
