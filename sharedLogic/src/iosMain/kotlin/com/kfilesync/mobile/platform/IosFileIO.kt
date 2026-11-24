@@ -16,12 +16,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSData
 import platform.Foundation.NSError
+import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileHandle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSFileSize
 import platform.Foundation.NSNumber
+import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
+import platform.Foundation.NSUserDomainMask
 import platform.Foundation.fileHandleForReadingFromURL
 import platform.Foundation.fileHandleForWritingToURL
 
@@ -183,6 +186,21 @@ class IosFileSink : FileSink {
         Unit
     }
  
+    private val defaultDownloadsDir: String by lazy {
+        val docs = (NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true)
+            .firstOrNull() as? String)
+            ?: NSTemporaryDirectory()
+        val base = if (docs.endsWith("/")) docs.dropLast(1) else docs
+        val dir = "$base/Downloads"
+        NSFileManager.defaultManager.createDirectoryAtPath(
+            dir,
+            withIntermediateDirectories = true,
+            attributes = null,
+            error = null
+        )
+        dir
+    }
+
     override suspend fun finalize(
         tempLocator: String,
         targetDirectory: String?,
@@ -195,12 +213,22 @@ class IosFileSink : FileSink {
             }
         }
         val tempUrl = NSURL(string = tempLocator)
-        if (targetDirectory.isNullOrBlank()) {
-            // Fallback: leave in inbox dir. Phase 5 wires share-sheet/destination.
-            return@withContext tempLocator
+        val rawDir = if (targetDirectory.isNullOrBlank()) {
+            defaultDownloadsDir
+        } else if (targetDirectory.startsWith("file://")) {
+            NSURL(string = targetDirectory)?.path ?: targetDirectory.removePrefix("file://")
+        } else {
+            targetDirectory
         }
-        val destDir = if (targetDirectory.endsWith("/")) targetDirectory.dropLast(1) else targetDirectory
-        val destPath = "$destDir/$fileName"
+        val destDir = if (rawDir.endsWith("/")) rawDir.dropLast(1) else rawDir
+        NSFileManager.defaultManager.createDirectoryAtPath(
+            destDir,
+            withIntermediateDirectories = true,
+            attributes = null,
+            error = null
+        )
+        val uniqueName = ensureUniqueName(destDir, fileName.substringAfterLast('/'))
+        val destPath = "$destDir/$uniqueName"
         val destUrl = NSURL.fileURLWithPath(destPath)
         val moved = NSFileManager.defaultManager.moveItemAtURL(tempUrl, destUrl, null)
         if (!moved) {
@@ -208,6 +236,17 @@ class IosFileSink : FileSink {
             return@withContext tempLocator
         }
         destUrl.absoluteString!!
+    }
+
+    private fun ensureUniqueName(dir: String, name: String): String {
+        val fm = NSFileManager.defaultManager
+        if (!fm.fileExistsAtPath("$dir/$name")) return name
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (fm.fileExistsAtPath("$dir/$base ($i)$ext")) i += 1
+        return "$base ($i)$ext"
     }
  
     override suspend fun discard(locator: String) = withContext(Dispatchers.Default) {

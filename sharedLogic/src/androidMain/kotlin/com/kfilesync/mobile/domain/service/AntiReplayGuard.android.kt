@@ -34,6 +34,7 @@ actual class AntiReplayGuard actual constructor() {
             fingerprintHeader = fingerprintHeader
         )
         val entries = pairedDevices.map { PairedDeviceEntry(it.deviceId, it.certFingerprintHex) }
+        native.pruneExpired(nowMs, windowSizeMs)
         return when (val decision = native.evaluateInbound(requestMeta, entries, nowMs, windowSizeMs, clockSkewMs)) {
             is FfiTrustDecision.Allow -> TrustDecision.Allow(decision.peerDeviceId, decision.peerFingerprint)
             is FfiTrustDecision.AllowUnpairedForPairing -> TrustDecision.AllowUnpairedForPairing
@@ -43,5 +44,9 @@ actual class AntiReplayGuard actual constructor() {
                 reason = decision.reason
             )
         }
+    }
+
+    actual fun clearDevice(deviceId: String) {
+        native.clearDevice(deviceId)
     }
 }

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kfilesync.mobile.application.service.SettingsAppService
 import com.kfilesync.mobile.application.service.SettingsSnapshot
+import com.kfilesync.mobile.domain.port.DirectoryPicker
 import com.kfilesync.mobile.domain.service.SyncPolicyId
 import io.github.aakira.napier.Napier
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,7 +47,8 @@ data class SettingsUiState(
  * single dependency is the AppService - keep this small.
  */
 class SettingsViewModel(
-    private val settingsService: SettingsAppService
+    private val settingsService: SettingsAppService,
+    private val directoryPicker: DirectoryPicker? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -116,6 +118,35 @@ class SettingsViewModel(
                         )
                     }
                 }
+        }
+    }
+
+    fun pickDownloadDirectory() {
+        val picker = directoryPicker ?: run {
+            _state.update { it.copy(errorMessage = "Directory picker is unavailable on this device") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(errorMessage = null) }
+            val picked = runCatching { picker.pickDirectory() }
+                .onFailure { t ->
+                    Napier.w("pickDownloadDirectory failed", t)
+                    _state.update { it.copy(errorMessage = t.message ?: "Failed to pick folder") }
+                }
+                .getOrNull()
+                ?: return@launch
+            settingsService.setDownloadDirectory(picked).onFailure { t ->
+                _state.update { it.copy(errorMessage = t.message ?: "Failed to save download directory") }
+            }
+        }
+    }
+
+    fun resetDownloadDirectory() {
+        viewModelScope.launch {
+            _state.update { it.copy(errorMessage = null) }
+            settingsService.resetDownloadDirectory().onFailure { t ->
+                _state.update { it.copy(errorMessage = t.message ?: "Failed to reset download directory") }
+            }
         }
     }
 

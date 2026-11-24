@@ -99,7 +99,7 @@ data class IncomingTransferRequest(
  */
 interface TransferAppService {
     /** Sender entry-point. Returns the JobId of the newly-created outgoing job. */
-    suspend fun sendFiles(target: DeviceId, files: List<PlatformFile>): JobId
+    suspend fun sendFiles(target: DeviceId, files: List<PlatformFile>, shareId: com.kfilesync.mobile.domain.model.ShareId? = null): JobId
 
     /** User accepted an inbound request from the UI. */
     suspend fun acceptTransfer(sessionId: String, targetDirectory: String? = null): Result<Unit>
@@ -184,7 +184,10 @@ class TransferServiceImpl(
     private val chunkingStrategy: ChunkingStrategy,
     private val clock: () -> Instant = { Clock.System.now() },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-    private val discoveryCoordinator: DiscoveryCoordinator? = null
+    private val discoveryCoordinator: DiscoveryCoordinator? = null,
+    private val shareRepository: com.kfilesync.mobile.domain.port.ShareRepository? = null,
+    private val policyEnforcer: com.kfilesync.mobile.domain.service.PolicyEnforcer? = null,
+    private val downloadDirProvider: (() -> String?)? = null
 ) : TransferAppService {
 
     private val transfers = MutableStateFlow<List<TransferRow>>(emptyList())
@@ -203,7 +206,11 @@ class TransferServiceImpl(
 
     // ----------------- sender side -----------------
 
-    override suspend fun sendFiles(target: DeviceId, files: List<PlatformFile>): JobId {
+    override suspend fun sendFiles(
+        target: DeviceId,
+        files: List<PlatformFile>,
+        shareId: com.kfilesync.mobile.domain.model.ShareId?
+    ): JobId {
         require(files.isNotEmpty()) { "sendFiles requires at least one file" }
         val peer = deviceRepository.findById(target)
             ?: throw DomainError.DeviceNotFound(target)
@@ -226,7 +233,8 @@ class TransferServiceImpl(
             peer = target,
             files = plans,
             strategy = chunkingStrategy,
-            createdAt = now
+            createdAt = now,
+            shareId = shareId
         )
 
         transferRepository.saveJob(job)
@@ -558,6 +566,26 @@ class TransferServiceImpl(
             )
         }
 
+        // If share_id is present, enforce share write policy and resolve share root.
+        val shareIdObj = body.shareId?.takeIf { it.isNotBlank() }?.let { com.kfilesync.mobile.domain.model.ShareId(it) }
+        var shareTargetDir: String? = null
+        if (shareIdObj != null) {
+            val enforcer = policyEnforcer
+            if (enforcer != null && !enforcer.canPush(fromId, shareIdObj)) {
+                Napier.w("transfer request for share ${shareIdObj.value} from ${fromId.value} denied by PolicyEnforcer")
+                return TransferAcceptDto(
+                    sessionId = body.sessionId,
+                    jobId = body.jobId,
+                    accepted = false,
+                    reason = "permission denied"
+                )
+            }
+            val share = shareRepository?.findById(shareIdObj)
+            if (share != null && share.localPath.isNotBlank()) {
+                shareTargetDir = share.localPath
+            }
+        }
+
         // Build & persist the incoming job in Pending state. acceptTransfer() flips it Active.
         val plans = body.files.map {
             FilePlan(
@@ -576,7 +604,8 @@ class TransferServiceImpl(
             peer = fromId,
             files = plans,
             strategy = chunkingStrategy,
-            createdAt = now
+            createdAt = now,
+            shareId = shareIdObj
         )
         transferRepository.saveJob(job)
         publishRow(job, from.alias)
@@ -612,7 +641,10 @@ class TransferServiceImpl(
         // Prepare receive session in memory so incoming chunks are accepted seamlessly
         sessionsLock.withLock {
             val s = sessions.getOrPut(jobId) {
-                ReceiveSession(jobId = jobId, targetDirectory = null)
+                ReceiveSession(jobId = jobId, targetDirectory = shareTargetDir)
+            }
+            if (shareTargetDir != null) {
+                s.targetDirectory = shareTargetDir
             }
             s.userAccepted = true
         }
@@ -774,9 +806,10 @@ class TransferServiceImpl(
                 return TransferChunkAckDto(jobId = jobId, fileId = fileId, chunkIndex = chunkIndex, verified = false)
             }
 
+            val resolvedTargetDir = session.targetDirectory ?: downloadDirProvider?.invoke()
             val finalLocator = fileSink.finalize(
                 tempLocator = tempLocator,
-                targetDirectory = session.targetDirectory,
+                targetDirectory = resolvedTargetDir,
                 fileName = item.path.substringAfterLast('/')
             )
 

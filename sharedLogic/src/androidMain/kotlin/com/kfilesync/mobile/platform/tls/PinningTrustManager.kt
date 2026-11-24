@@ -63,6 +63,10 @@ class PinningTrustManager(
 
     private fun checkPinned(chain: Array<X509Certificate>) {
         val leaf = chain.firstOrNull() ?: throw CertificateException("empty cert chain")
+        if (pinned.isBootstrapActive()) {
+            Napier.d("PinningTrustManager: scoped TOFU bootstrap active for pairing/probe")
+            return
+        }
         val pinnedSet = pinned.pinnedFingerprints()
         val everPaired = pinned.hasEverPaired()
         if (pinnedSet.isEmpty()) {

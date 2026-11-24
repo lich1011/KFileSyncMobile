@@ -44,6 +44,7 @@ data class LocalIdentity(
 /** Provider port - kept tiny so the Ktor route handlers can depend on it directly. */
 interface LocalIdentityProvider {
     fun current(): LocalIdentity
+    fun updateAlias(newAlias: String) {}
 }
 
 /** Phase 0 / test default. Real persistence arrives via [PlatformBackedLocalIdentityProvider]. */
@@ -53,25 +54,12 @@ class InMemoryLocalIdentityProvider(
     override fun current(): LocalIdentity = identity
 }
 
-/**
- * Phase 1 implementation: defers to a [DeviceIdentityProvider] on first
- * access, then caches the result.
- *
- * The platform's [DeviceIdentityProvider] is responsible for key generation
- * + cert minting + persistence, so calling `loadOrCreateGenerate(alias)` is
- * idempotent across restarts. This provider just bundles the cryptographic
- * identity into the [LocalIdentity] shape the rest of the app uses.
- *
- * Threading: `current()` is sync because all known callers are running on a
- * worker dispatcher already (Ktor route handlers, ViewModels). We bridge the
- * suspend call via `runBlocking` exactly once at first-use; the result is
- * cached so subsequent calls are non-blocking.
- */
 class PlatformBackedLocalIdentityProvider(
     private val identityProvider: DeviceIdentityProvider,
     private val platform: DevicePlatform,
     private val defaultAlias: String,
-    private val port: Int = 53317
+    private val port: Int = 53317,
+    private val persistedAliasReader: (() -> String?)? = null
 ) : LocalIdentityProvider {
 
     @Volatile
@@ -79,16 +67,26 @@ class PlatformBackedLocalIdentityProvider(
 
     private val mutex = Mutex()
 
+    override fun updateAlias(newAlias: String) {
+        val trimmed = newAlias.trim()
+        if (trimmed.isBlank()) return
+        cached = cached?.copy(alias = trimmed)
+    }
+
     override fun current(): LocalIdentity {
         cached?.let { return it }
         return runBlocking {
             mutex.withLock {
                 cached?.let { return@withLock it }
                 Napier.i("PlatformBackedLocalIdentityProvider: bootstrapping identity")
-                val crypto = identityProvider.loadOrGenerate(defaultAlias)
+                val effectiveAlias = runCatching { persistedAliasReader?.invoke() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: defaultAlias
+                val crypto = identityProvider.loadOrGenerate(effectiveAlias)
                 val fresh = LocalIdentity(
                     deviceId = crypto.deviceId,
-                    alias = defaultAlias,
+                    alias = effectiveAlias,
                     platform = platform,
                     fingerprint = crypto.fingerprint,
                     certificatePem = crypto.certificatePem,

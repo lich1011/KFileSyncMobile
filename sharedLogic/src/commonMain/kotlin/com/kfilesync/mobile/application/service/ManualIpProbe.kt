@@ -38,7 +38,7 @@ class ManualIpProbe(
     private val fetchInfo: InfoFetcher
 ) {
     /** Convenience constructor for production wiring. */
-    constructor(httpClient: LanSyncHttpClient) : this(fetchInfo = { url -> httpClient.fetchInfo(url) })
+    constructor(httpClient: LanSyncHttpClient) : this(fetchInfo = { url -> httpClient.fetchInfo(url, allowBootstrap = true) })
 
     /**
      * Probe `https://[host]:[port]` and return the peer's [DiscoveredDevice]

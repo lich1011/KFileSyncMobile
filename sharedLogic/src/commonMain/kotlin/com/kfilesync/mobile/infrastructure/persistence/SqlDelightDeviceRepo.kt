@@ -48,7 +48,7 @@ class SqlDelightDeviceRepo(
     }
 
     override suspend fun findAll(): List<Device> = withContext(Dispatchers.Default) {
-        db.deviceQueries.findPaired()
+        db.deviceQueries.findAll()
             .executeAsList()
             .map { it.toDomain() }
     }

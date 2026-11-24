@@ -166,8 +166,13 @@ class DevicesViewModel(
     fun probeManual(host: String, port: Int) {
         viewModelScope.launch {
             val peer = manualIpProbe.probe(host = host, port = port)
-            if (peer != null) discoveryCoordinator.addManual(peer)
-            else Napier.w("manual IP probe $host:$port did not respond")
+            if (peer != null) {
+                discoveryCoordinator.addManual(peer)
+                deviceService.refreshPaired()
+                runCatching { heartbeatService.tick() }
+            } else {
+                Napier.w("manual IP probe $host:$port did not respond")
+            }
         }
     }
 
@@ -179,12 +184,14 @@ class DevicesViewModel(
         presence: Map<DeviceId, OnlineState>,
         pairing: PairingUiState
     ): DevicesUiState {
+        // Only treat rows actually in Paired state as paired peers.
+        val actuallyPaired = paired.filter { it.state == com.kfilesync.mobile.domain.model.DeviceState.Paired }
         // De-dup: if a discovered device is already in the paired list,
         // suppress it from the "discoveries" panel to avoid double rows.
-        val pairedIds = paired.map { it.id }.toSet()
+        val pairedIds = actuallyPaired.map { it.id }.toSet()
         val unpaired = discovered.filter { it.deviceId !in pairedIds }
         return DevicesUiState(
-            paired = paired.map { dev ->
+            paired = actuallyPaired.map { dev ->
                 PairedDeviceRow(
                     device = dev,
                     online = presence[dev.id]?.let { it is OnlineState.Online } ?: false

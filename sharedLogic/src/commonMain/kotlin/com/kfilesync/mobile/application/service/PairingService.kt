@@ -25,9 +25,12 @@ import com.kfilesync.mobile.domain.port.EventBus
 import com.kfilesync.mobile.domain.port.PairingRequestRepository
 import com.kfilesync.mobile.domain.service.PairingSessionState
 import com.kfilesync.mobile.domain.service.PairingStateMachine
+import com.kfilesync.mobile.infrastructure.crypto.HashProvider
+import com.kfilesync.mobile.infrastructure.crypto.PemUtils
 import com.kfilesync.mobile.infrastructure.crypto.SecureRng
 import com.kfilesync.mobile.infrastructure.crypto.nextHex
 import com.kfilesync.mobile.infrastructure.crypto.nextIntBelow
+import com.kfilesync.mobile.infrastructure.crypto.toHexLower
 import com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient
 import io.github.aakira.napier.Napier
 import kotlin.time.Clock
@@ -87,8 +90,11 @@ class PairingService(
     private val nonceGenerator: () -> Nonce = { generateSecureNonce() },
     private val sessionIdGenerator: () -> String = { generateSecureSessionId() },
     private val stateMachine: PairingStateMachine = PairingStateMachine(),
-    private val discoveryCoordinator: DiscoveryCoordinator? = null
+    private val discoveryCoordinator: DiscoveryCoordinator? = null,
+    private val pinnedTrustSnapshot: com.kfilesync.mobile.infrastructure.network.PinnedTrustSnapshot? = null
 ) {
+    /** Best-effort peer address captured on incoming `/pair/request`, keyed by sessionId. */
+    private val recentPeerHosts = mutableMapOf<String, String>()
 
     /**
      * Outbound: open a session targeted at [peer] and POST `/pair/request`.
@@ -97,12 +103,13 @@ class PairingService(
      * this for the user to read to the peer.
      */
     suspend fun initiateOutgoing(peer: PairingTarget): PairingSession {
-        pairingRepo.cleanupExpired(now = clock())
+        val now = clock()
+        pairingRepo.cleanupExpired(now = now)
+        cancelPendingSessionsFor(peer.deviceId, now)
         val local = localIdentityProvider.current()
         val sessionId = sessionIdGenerator()
         val nonce = nonceGenerator()
         val pin = pinGenerator()
-        val now = clock()
         // Delegates to core's trust::pairing_state::start_outbound for the
         // state-machine fields (expiry/attempts) - core's PreparedRequest
         // half of the result is intentionally discarded, see
@@ -163,9 +170,12 @@ class PairingService(
      * Generates OUR PIN locally - the originator never gets to set it.
      */
     suspend fun receiveIncoming(request: PairRequestDto, remoteHost: String? = null): PairingSession {
-        pairingRepo.cleanupExpired(now = clock())
-        val pin = pinGenerator()
         val now = clock()
+        pairingRepo.cleanupExpired(now = now)
+        val peerId = DeviceId(value = request.fromDeviceId)
+        cancelPendingSessionsFor(peerId, now)
+        val normalizedHost = normalizeRemoteHost(remoteHost)
+        val pin = pinGenerator()
         val state = stateMachine.receiveIncoming(
             requestId = request.requestId,
             fromDeviceId = request.fromDeviceId,
@@ -176,7 +186,7 @@ class PairingService(
         )
         val session = PairingSession(
             sessionId = request.requestId,
-            peerDeviceId = DeviceId(value = request.fromDeviceId),
+            peerDeviceId = peerId,
             direction = PairingDirection.Incoming,
             pin = pin,
             nonce = Nonce(value = request.nonce),
@@ -188,6 +198,9 @@ class PairingService(
             maxAttempts = state.maxAttempts,
             createdAt = now
         )
+        if (normalizedHost != null) {
+            recentPeerHosts[session.sessionId] = normalizedHost
+        }
         pairingRepo.save(session)
         Napier.i(message = "received incoming pair session=${session.sessionId} from=${request.fromAlias}")
         eventBus.publish(
@@ -197,7 +210,7 @@ class PairingService(
                 peerAlias = session.peerAlias,
                 peerPlatform = session.peerPlatform,
                 peerFingerprint = session.peerFingerprint.hex,
-                peerAddress = remoteHost,
+                peerAddress = normalizedHost,
                 pin = session.pin.digits,
                 expiresAtEpochMs = session.expiry.expiresAt.toEpochMilliseconds()
             )
@@ -246,9 +259,20 @@ class PairingService(
 
         return if (resp.accepted && resp.peerCertificatePem != null) {
             val peerCert = resp.peerCertificatePem!!
+            if (!certMatchesDeviceId(peerCert, current.peerDeviceId.value)) {
+                Napier.w("outgoing pair session=$sessionId rejected: returned cert does not match peerDeviceId ${current.peerDeviceId.value}")
+                return Result.failure(exception = DomainError.PermissionDenied(reason = "peer certificate does not match device id"))
+            }
             val succeeded = current.copy(attempts = current.attempts + 1, status = com.kfilesync.mobile.domain.model.PairingStatus.Succeeded)
             pairingRepo.save(session = succeeded)
-            writePairedDevice(session = succeeded, certPem = peerCert, peerAlias, peerPlatform)
+            val explicitAddr = parseBaseUrlAddress(peerBaseUrl)
+            writePairedDevice(
+                session = succeeded,
+                certPem = peerCert,
+                peerAlias = peerAlias,
+                peerPlatform = peerPlatform,
+                explicitAddress = explicitAddr
+            )
             eventBus.publish(
                 event = PairingCompleted(
                     localDevice = local.deviceId,
@@ -258,6 +282,16 @@ class PairingService(
             Napier.i(message = "outgoing pair session=$sessionId succeeded; trust established")
             Result.success(value = Unit)
         } else {
+            // Double-confirm race: if our own inbound handler already finalized
+            // this exact session (peer confirmed our PIN concurrently), treat as success.
+            val latestSession = pairingRepo.findById(sessionId)
+            val reasonLower = resp.reason.orEmpty().lowercase()
+            if (latestSession?.status == com.kfilesync.mobile.domain.model.PairingStatus.Succeeded ||
+                ((reasonLower.contains("no such pairing session") || reasonLower.contains("succeeded")) &&
+                    deviceRepo.findById(current.peerDeviceId)?.state == DeviceState.Paired)
+            ) {
+                return Result.success(Unit)
+            }
             // The peer rejected the PIN over HTTP - this device never verifies
             // locally (that's the peer's job on its own session), it only
             // tracks the failed-attempt count for retry/lockout bookkeeping.
@@ -292,6 +326,18 @@ class PairingService(
 
         val current = session.expireIfNeeded(now)
         if (!current.isOpen) {
+            // Idempotent double-confirm: if this exact session already succeeded
+            // (e.g. user entered PINs on both sides) and the caller's cert matches
+            // the paired peer's deviceId, echo our cert with success instead of 403.
+            if (current.status == com.kfilesync.mobile.domain.model.PairingStatus.Succeeded &&
+                certMatchesDeviceId(body.certificatePem, current.peerDeviceId.value)
+            ) {
+                val local = localIdentityProvider.current()
+                return IncomingConfirmOutcome(
+                    result = Result.success(Unit),
+                    ourCertPem = local.certificatePem
+                )
+            }
             pairingRepo.save(session = current)
             return IncomingConfirmOutcome(
                 result = Result.failure(exception = DomainError.InvalidStateTransition(reason = "session ${current.status}")),
@@ -308,12 +354,28 @@ class PairingService(
         pairingRepo.save(session = outcome.session)
         return if (outcome.result.isSuccess) {
             val succeeded = outcome.session
+            if (!certMatchesDeviceId(body.certificatePem, succeeded.peerDeviceId.value)) {
+                Napier.w("incoming pair session=${succeeded.sessionId} rejected: cert does not match ${succeeded.peerDeviceId.value}")
+                return IncomingConfirmOutcome(
+                    result = Result.failure(exception = DomainError.PermissionDenied(reason = "certificate does not match requesting device id")),
+                    ourCertPem = null
+                )
+            }
             // Use the cert PEM + alias/platform captured at receiveIncoming()
             // time and persisted on the session - PairConfirmDto no longer
             // carries them (fixes issue #12 - was hardcoded "Peer").
             val peerAlias = succeeded.peerAlias.ifBlank { "Peer" }
             val peerPlatform = succeeded.peerPlatform
-            writePairedDevice(session = succeeded, certPem = body.certificatePem, peerAlias, peerPlatform)
+            val explicitAddr = recentPeerHosts.remove(succeeded.sessionId)?.let {
+                com.kfilesync.mobile.domain.model.DeviceAddress(host = it, port = 53317)
+            }
+            writePairedDevice(
+                session = succeeded,
+                certPem = body.certificatePem,
+                peerAlias = peerAlias,
+                peerPlatform = peerPlatform,
+                explicitAddress = explicitAddr
+            )
             val local = localIdentityProvider.current()
             eventBus.publish(
                 event = PairingCompleted(
@@ -339,21 +401,47 @@ class PairingService(
         val existing = deviceRepo.findById(deviceId)
             ?: return Result.failure(exception = DomainError.DeviceNotFound(deviceId))
 
-        // Best-effort notify the peer. Failure shouldn't block local revocation.
+        // Best-effort notify the peer with OUR local device_id (the revoking party).
+        val local = localIdentityProvider.current()
         existing.addresses.firstOrNull()?.let { addr ->
             httpClient.postPairRevoke(
                 baseUrl = "https://${addr.host}:${addr.port}",
                 body = PairRevokeDto(
-                    deviceId = deviceId.value,
+                    deviceId = local.deviceId.value,
                     reason = "user-initiated",
                     revokedAtMs = clock().toEpochMilliseconds()
                 )
             )
         }
         deviceRepo.updateTrustStatus(deviceId, status = com.kfilesync.mobile.domain.model.TrustStatus.Revoked)
+        pinnedTrustSnapshot?.refresh()
         eventBus.publish(event = TrustRevoked(deviceId = deviceId))
         Napier.i(message = "revoked trust for ${existing.alias} (${deviceId.value})")
         return Result.success(value = Unit)
+    }
+
+    /** Handle an inbound `/pair/revoke` from [peerId] without bouncing a revoke back. */
+    suspend fun onRemoteRevoke(peerId: DeviceId): Result<Unit> {
+        val existing = deviceRepo.findById(peerId)
+            ?: return Result.failure(exception = DomainError.DeviceNotFound(peerId))
+        deviceRepo.updateTrustStatus(peerId, status = com.kfilesync.mobile.domain.model.TrustStatus.Revoked)
+        pinnedTrustSnapshot?.refresh()
+        eventBus.publish(event = TrustRevoked(deviceId = peerId))
+        Napier.i(message = "remote peer ${existing.alias} (${peerId.value}) revoked trust")
+        return Result.success(value = Unit)
+    }
+
+    private fun certMatchesDeviceId(certPem: String, expectedDeviceId: String): Boolean {
+        val der = PemUtils.pemToDer(certPem) ?: return false
+        if (der.isEmpty()) return false
+        val actual = HashProvider.sha256(der).toHexLower()
+        val expected = expectedDeviceId.lowercase()
+        if (actual.length != expected.length) return false
+        var diff = 0
+        for (i in actual.indices) {
+            diff = diff or (actual[i].code xor expected[i].code)
+        }
+        return diff == 0
     }
 
     /** Cancel a pending session (user pressed cancel in the UI). */
@@ -366,17 +454,19 @@ class PairingService(
         session: PairingSession,
         certPem: String,
         peerAlias: String,
-        peerPlatform: DevicePlatform
+        peerPlatform: DevicePlatform,
+        explicitAddress: com.kfilesync.mobile.domain.model.DeviceAddress? = null
     ) {
         val now = clock()
-        // Preserve any addresses already known for this device (e.g. from
-        // discovery), so the heartbeat can immediately start pinging.
+        // Prefer the freshest reachable address (explicit pairing endpoint or live
+        // discovery) over a potentially stale persisted IP from an older Wi-Fi network.
         val existing = deviceRepo.findById(session.peerDeviceId)
         val discoveredAddrs = discoveryCoordinator?.devices?.value
             ?.firstOrNull { it.deviceId == session.peerDeviceId }
             ?.addresses
-        val addresses = existing?.addresses?.takeIf { it.isNotEmpty() }
-            ?: discoveredAddrs?.takeIf { it.isNotEmpty() }
+        val addresses = discoveredAddrs?.takeIf { it.isNotEmpty() }
+            ?: explicitAddress?.let { listOf(it) }
+            ?: existing?.addresses?.takeIf { it.isNotEmpty() }
             ?: emptyList()
         val device = Device(
             id = session.peerDeviceId,
@@ -390,6 +480,46 @@ class PairingService(
         )
         deviceRepo.save(device)
         deviceRepo.updateTrustStatus(session.peerDeviceId, status = com.kfilesync.mobile.domain.model.TrustStatus.Paired)
+        pinnedTrustSnapshot?.refresh()
+    }
+
+    private suspend fun cancelPendingSessionsFor(peerId: DeviceId, now: Instant) {
+        val pending = runCatching { pairingRepo.findPending(now) }.getOrDefault(emptyList())
+        for (stale in pending) {
+            if (stale.peerDeviceId == peerId && stale.isOpen) {
+                pairingRepo.save(stale.cancel())
+            }
+        }
+    }
+
+    private fun normalizeRemoteHost(raw: String?): String? {
+        val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return trimmed.removePrefix("::ffff:").removePrefix("::FFFF:")
+    }
+
+    private fun parseBaseUrlAddress(baseUrl: String): com.kfilesync.mobile.domain.model.DeviceAddress? {
+        val noScheme = baseUrl.removePrefix("https://").removePrefix("http://").substringBefore("/")
+        if (noScheme.isBlank()) return null
+        val host: String
+        val port: Int
+        if (noScheme.startsWith("[")) {
+            val end = noScheme.indexOf(']')
+            if (end <= 1) return null
+            host = noScheme.substring(1, end)
+            port = noScheme.substring(end + 1).removePrefix(":").toIntOrNull() ?: 53317
+        } else {
+            val colon = noScheme.lastIndexOf(':')
+            if (colon > 0) {
+                host = noScheme.substring(0, colon)
+                port = noScheme.substring(colon + 1).toIntOrNull() ?: 53317
+            } else {
+                host = noScheme
+                port = 53317
+            }
+        }
+        return normalizeRemoteHost(host)?.let {
+            com.kfilesync.mobile.domain.model.DeviceAddress(host = it, port = port)
+        }
     }
 
     private fun inferDeviceType(platform: DevicePlatform): DeviceType = when (platform) {

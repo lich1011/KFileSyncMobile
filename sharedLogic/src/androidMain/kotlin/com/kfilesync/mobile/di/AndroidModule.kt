@@ -66,11 +66,13 @@ val androidModule = module {
 
     // ---- Local identity bridge ----
     single<LocalIdentityProvider> {
+        val db = get<com.kfilesync.mobile.db.KFileSyncDatabase>()
         PlatformBackedLocalIdentityProvider(
             identityProvider = get(),
             platform = DevicePlatform.Android,
             defaultAlias = "Android " + (Build.MODEL ?: "device"),
-            port = 53317
+            port = 53317,
+            persistedAliasReader = { db.configQueries.get("device.alias").executeAsOneOrNull() }
         )
     }
 
@@ -125,11 +127,12 @@ val androidModule = module {
         )
     }
 
-    // ---- HTTP client (pinned OkHttp engine + anti-reply signer) ----
+    // ---- HTTP client (pinned OkHttp engine + anti-replay signer + scoped bootstrap) ----
     single {
         LanSyncHttpClient(
             engineFactory = pinnedHttpClientEngine(pinned = get()),
-            antiReplay = AntiReplayHeaderProvider(localIdentityProvider = get())
+            antiReplay = AntiReplayHeaderProvider(localIdentityProvider = get()),
+            pinnedTrust = get()
         )
     }
 }

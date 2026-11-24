@@ -17,6 +17,7 @@ import com.kfilesync.mobile.domain.port.FileSource
 import com.kfilesync.mobile.domain.port.FileWatcher
 import com.kfilesync.mobile.domain.port.KeyStore
 import com.kfilesync.mobile.domain.port.NetworkMonitor
+import com.kfilesync.mobile.infrastructure.network.AntiReplayHeaderProvider
 import com.kfilesync.mobile.infrastructure.network.HttpServer
 import com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient
 import com.kfilesync.mobile.infrastructure.network.pinnedHttpClientEngine
@@ -82,11 +83,13 @@ val iosModule = module {
 
     // ---- Local identity bridge ----
     single<LocalIdentityProvider> {
+        val db = get<com.kfilesync.mobile.db.KFileSyncDatabase>()
         PlatformBackedLocalIdentityProvider(
             identityProvider = get(),
             platform = DevicePlatform.IOS,
             defaultAlias = "iPhone " + UIDevice.currentDevice.model,
-            port = 53317
+            port = 53317,
+            persistedAliasReader = { db.configQueries.get("device.alias").executeAsOneOrNull() }
         )
     }
 
@@ -137,10 +140,12 @@ val iosModule = module {
         )
     }
 
-    // ---- HTTP client (pinned Darwin engine) ----
+    // ---- HTTP client (pinned Darwin engine + anti-replay signer + scoped bootstrap) ----
     single {
         LanSyncHttpClient(
-            engineFactory = pinnedHttpClientEngine(pinned = get())
+            engineFactory = pinnedHttpClientEngine(pinned = get()),
+            antiReplay = AntiReplayHeaderProvider(localIdentityProvider = get()),
+            pinnedTrust = get()
         )
     }
 

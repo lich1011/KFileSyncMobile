@@ -1,7 +1,11 @@
 package com.kfilesync.mobile.platform
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import com.kfilesync.mobile.domain.port.FileSink
@@ -36,10 +40,11 @@ class AndroidFileSource(private val context: Context) : FileSource {
     private data class OpenStream(
         val input: InputStream?,
         val raf: RandomAccessFile?,
+        val tempFile: File? = null,
         var positionChunk: Int
     )
 
-    private val streams = mutableMapOf<String, OpenStream>()
+    private val streams = java.util.concurrent.ConcurrentHashMap<String, OpenStream>()
 
     override suspend fun size(locator: String): Long = withContext(Dispatchers.IO) {
         runCatching {
@@ -71,8 +76,10 @@ class AndroidFileSource(private val context: Context) : FileSource {
             return@withContext read
         }
         // Random-access path (resume): open a RAF, seek by chunkSize.
-        val raf = open.raf ?: openRandomAccess(locator).also {
-            streams[locator] = open.copy(raf = it, input = null)
+        val raf = open.raf ?: run {
+            val (r, tmp) = openRandomAccess(locator)
+            streams[locator] = open.copy(raf = r, tempFile = tmp, input = null)
+            r
         }
         raf.seek(chunkIndex.toLong() * chunkSize.toLong())
         var total = 0
@@ -93,6 +100,7 @@ class AndroidFileSource(private val context: Context) : FileSource {
         streams.remove(locator)?.let { s ->
             runCatching { s.input?.close() }
             runCatching { s.raf?.close() }
+            runCatching { s.tempFile?.delete() }
         }
         Unit
     }
@@ -102,23 +110,17 @@ class AndroidFileSource(private val context: Context) : FileSource {
         if (existing != null) return existing
         val stream = context.contentResolver.openInputStream(Uri.parse(locator))
             ?: throw IllegalStateException("cannot open URI $locator")
-        val fresh = OpenStream(input = stream, raf = null, positionChunk = chunkIndex)
+        val fresh = OpenStream(input = stream, raf = null, tempFile = null, positionChunk = chunkIndex)
         streams[locator] = fresh
         return fresh
     }
 
-    /**
-     * Open a RandomAccessFile for content URIs by copying into a temp file
-     * once. AndroidContentProvider doesn't give us a seekable handle in
-     * general; the materialised copy lives in cacheDir for the rest of the
-     * transfer's lifetime, and the temp file is cleaned up on `close()`.
-     */
-    private fun openRandomAccess(locator: String): RandomAccessFile {
+    private fun openRandomAccess(locator: String): Pair<RandomAccessFile, File> {
         val temp = File.createTempFile("kfilesync_src_", ".bin", context.cacheDir)
         context.contentResolver.openInputStream(Uri.parse(locator))?.use { input ->
             FileOutputStream(temp).use { out -> input.copyTo(out) }
         } ?: throw IllegalStateException("cannot materialise URI $locator")
-        return RandomAccessFile(temp, "r")
+        return Pair(RandomAccessFile(temp, "r"), temp)
     }
 
     private fun readFully(input: InputStream, dest: ByteArray, target: Int): Int {
@@ -178,12 +180,11 @@ class AndroidFileSink(private val context: Context) : FileSink {
         runCatching { openFiles.remove(tempLocator)?.close() }
         val tempFile = File(tempLocator)
         if (targetDirectory.isNullOrBlank()) {
-            // Fallback: leave in inbox dir. Phase 5 wires Downloads via MediaStore.
-            val finalFile = File(inboxDir, ensureUniqueName(inboxDir, fileName))
-            tempFile.renameTo(finalFile)
-            return@withContext finalFile.absolutePath
+            // Default destination: device's public Downloads/KFileSync folder so
+            // received files are immediately visible in the system Files/Downloads app.
+            return@withContext saveToPublicDownloads(tempFile, fileName)
         }
-        // Tree URI path: copy via DocumentFile + ContentResolver.
+        // User-selected custom directory (SAF tree URI): copy via DocumentFile + ContentResolver.
         val tree = DocumentFile.fromTreeUri(context, Uri.parse(targetDirectory))
             ?: error("target directory is not a SAF tree URI: $targetDirectory")
         val mime = guessMime(fileName)
@@ -196,6 +197,72 @@ class AndroidFileSink(private val context: Context) : FileSink {
 
         tempFile.delete()
         finalDoc.uri.toString()
+    }
+
+    private fun saveToPublicDownloads(tempFile: File, fileName: String): String {
+        val safeName = fileName.substringAfterLast('/').ifBlank { "received_file" }
+        // Android 10+ (API 29+): MediaStore.Downloads requires no storage permission.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val savedUri = runCatching {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                    put(MediaStore.Downloads.MIME_TYPE, guessMime(safeName))
+                    put(
+                        MediaStore.Downloads.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_DOWNLOADS}/KFileSync"
+                    )
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: error("MediaStore.Downloads insert returned null")
+                try {
+                    resolver.openOutputStream(uri, "w")?.use { out ->
+                        FileInputStream(tempFile).use { input -> input.copyTo(out) }
+                    } ?: error("MediaStore openOutputStream failed")
+                    val ready = ContentValues().apply {
+                        put(MediaStore.Downloads.IS_PENDING, 0)
+                    }
+                    resolver.update(uri, ready, null, null)
+                    tempFile.delete()
+                    uri.toString()
+                } catch (t: Throwable) {
+                    runCatching { resolver.delete(uri, null, null) }
+                    throw t
+                }
+            }.onFailure {
+                Napier.w("MediaStore Downloads save failed, falling back to filesystem: ${it.message}")
+            }.getOrNull()
+            if (savedUri != null) return savedUri
+        }
+
+        // API 26-28 or fallback: public Downloads/KFileSync -> app external Downloads -> cache inbox.
+        val candidateDirs = listOfNotNull(
+            @Suppress("DEPRECATION")
+            runCatching {
+                File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "KFileSync"
+                )
+            }.getOrNull(),
+            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.let { File(it, "KFileSync") },
+            inboxDir
+        )
+        for (dir in candidateDirs) {
+            val saved = runCatching {
+                if (!dir.exists() && !dir.mkdirs()) error("mkdirs failed for ${dir.absolutePath}")
+                val dest = File(dir, ensureUniqueName(dir, safeName))
+                if (!tempFile.renameTo(dest)) {
+                    FileInputStream(tempFile).use { input ->
+                        FileOutputStream(dest).use { out -> input.copyTo(out) }
+                    }
+                    tempFile.delete()
+                }
+                dest.absolutePath
+            }.getOrNull()
+            if (saved != null) return saved
+        }
+        return tempFile.absolutePath
     }
 
     override suspend fun discard(locator: String) = withContext(Dispatchers.IO) {

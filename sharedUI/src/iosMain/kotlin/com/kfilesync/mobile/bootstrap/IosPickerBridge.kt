@@ -1,4 +1,27 @@
+package com.kfilesync.mobile.bootstrap
+
+import com.kfilesync.mobile.domain.port.PlatformFile
+import com.kfilesync.mobile.platform.IosDirectoryPicker
+import com.kfilesync.mobile.platform.IosFilePicker
+import io.github.aakira.napier.Napier
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
+/**
+ * Bridge between Kotlin's [IosFilePicker]/[IosDirectoryPicker] request flows
+ * and Swift's `KFileSyncBridge` UIKit document picker presentation.
+ */
 object IosPickerBridge {
+    var onPickFiles: ((Boolean) -> Unit)? = null
+    var onPickDirectory: (() -> Unit)? = null
+
+    private var filePicker: IosFilePicker? = null
+    private var directoryPicker: IosDirectoryPicker? = null
+    private var started: Boolean = false
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     fun install(filePicker: IosFilePicker, directoryPicker: IosDirectoryPicker) {
         this.filePicker = filePicker
         this.directoryPicker = directoryPicker

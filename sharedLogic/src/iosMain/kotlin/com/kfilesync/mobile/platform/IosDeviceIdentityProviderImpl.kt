@@ -32,6 +32,7 @@ import platform.Foundation.date
 import platform.Foundation.dateWithTimeIntervalSinceNow
 import platform.Foundation.timeIntervalSince1970
 import platform.Foundation.timeZoneWithAbbreviation
+import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
 import platform.Security.SecKeyCopyExternalRepresentation
@@ -39,6 +40,7 @@ import platform.Security.SecKeyCopyPublicKey
 import platform.Security.SecKeyCreateRandomKey
 import platform.Security.SecKeyCreateSignature
 import platform.Security.SecKeyRef
+import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrApplicationTag
 import platform.Security.kSecAttrIsPermanent
 import platform.Security.kSecAttrKeyClass
@@ -46,11 +48,15 @@ import platform.Security.kSecAttrKeyClassPrivate
 import platform.Security.kSecAttrKeySizeInBits
 import platform.Security.kSecAttrKeyType
 import platform.Security.kSecAttrKeyTypeEC
+import platform.Security.kSecAttrService
 import platform.Security.kSecClass
+import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecClassKey
 import platform.Security.kSecKeyAlgorithmECDSASignatureMessageX962SHA256
 import platform.Security.kSecPrivateKeyAttrs
+import platform.Security.kSecReturnData
 import platform.Security.kSecReturnRef
+import platform.Security.kSecValueData
 
 /**
  * iOS implementation of [DeviceIdentityProvider] (T1.1).
@@ -83,8 +89,13 @@ class IosDeviceIdentityProviderImpl : DeviceIdentityProvider {
         withContext(Dispatchers.Default) {
             val (privateKey, publicKey) = loadOrCreateKeyPair()
             try {
-                val publicKeyData = publicKey.exportX963()
-                val certDer = signSelfCert(alias, publicKeyData, privateKey)
+                // Reload persisted cert DER so deviceId & TLS fingerprint remain stable across launches.
+                val certDer = loadPersistedCertDer() ?: run {
+                    val publicKeyData = publicKey.exportX963()
+                    val freshlyMinted = signSelfCert(alias, publicKeyData, privateKey)
+                    savePersistedCertDer(freshlyMinted)
+                    freshlyMinted
+                }
                 certToIdentity(certDer)
             } finally {
                 CFRelease(privateKey)
@@ -105,7 +116,58 @@ class IosDeviceIdentityProviderImpl : DeviceIdentityProvider {
             if (status != 0 && status != -25300) { // -25300 is errSecItemNotFound
                 Napier.w("wipe SecItemDelete status=$status")
             }
+            val certQuery = mapOf<Any?, Any?>(
+                kSecClass to kSecClassGenericPassword,
+                kSecAttrService to CERT_KEYCHAIN_SERVICE,
+                kSecAttrAccount to CERT_KEYCHAIN_ACCOUNT
+            )
+            @Suppress("UNCHECKED_CAST")
+            SecItemDelete(certQuery as CFDictionaryRef)
         }
+    }
+
+    private fun loadPersistedCertDer(): ByteArray? = memScoped {
+        val query = mapOf<Any?, Any?>(
+            kSecClass to kSecClassGenericPassword,
+            kSecAttrService to CERT_KEYCHAIN_SERVICE,
+            kSecAttrAccount to CERT_KEYCHAIN_ACCOUNT,
+            kSecReturnData to true
+        )
+        val out = allocPointerTo<CFTypeRefVar>()
+        @Suppress("UNCHECKED_CAST")
+        val status = SecItemCopyMatching(query as CFDictionaryRef, out.ptr.reinterpret())
+        if (status == 0 && out.value != null) {
+            val nsData = CFBridgingRelease(out.value) as? NSData
+            nsData?.toByteArray()?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
+    }
+
+    private fun savePersistedCertDer(certDer: ByteArray) = memScoped {
+        val deleteQuery = mapOf<Any?, Any?>(
+            kSecClass to kSecClassGenericPassword,
+            kSecAttrService to CERT_KEYCHAIN_SERVICE,
+            kSecAttrAccount to CERT_KEYCHAIN_ACCOUNT
+        )
+        @Suppress("UNCHECKED_CAST")
+        SecItemDelete(deleteQuery as CFDictionaryRef)
+        val addQuery = mapOf<Any?, Any?>(
+            kSecClass to kSecClassGenericPassword,
+            kSecAttrService to CERT_KEYCHAIN_SERVICE,
+            kSecAttrAccount to CERT_KEYCHAIN_ACCOUNT,
+            kSecValueData to certDer.toNSData()
+        )
+        @Suppress("UNCHECKED_CAST")
+        val status = SecItemAdd(addQuery as CFDictionaryRef, null)
+        if (status != 0) {
+            Napier.w("iOS Keychain: failed to persist self-signed cert DER (status=$status)")
+        }
+    }
+
+    companion object {
+        private const val CERT_KEYCHAIN_SERVICE = "com.kfilesync.mobile.local_cert"
+        private const val CERT_KEYCHAIN_ACCOUNT = "device_cert_der_v1"
     }
 
     // -------------------- Key generation / loading --------------------

@@ -40,18 +40,24 @@ enum class SharePermission {
 enum class SyncMode {
     OneWayPush, OneWayPull, TwoWay;
 
+    /** Canonical wire string matching KFileSyncCore (`domain::SyncMode`). */
     fun toWire(): String = when (this) {
-        OneWayPush -> "one_way_push"
-        OneWayPull -> "one_way_pull"
+        OneWayPush -> "send_only"
+        OneWayPull -> "receive_only"
         TwoWay -> "two_way"
     }
 
     companion object {
+        /**
+         * Accepts canonical wire strings (`"two_way"`, `"send_only"`, `"receive_only"`)
+         * plus legacy mobile spellings (`"one_way_push"`, `"one_way_pull"`).
+         * Unknown values degrade safely to [OneWayPull] rather than widening to [TwoWay].
+         */
         fun fromWire(value: String): SyncMode = when (value) {
-            "one_way_push" -> OneWayPush
-            "one_way_pull" -> OneWayPull
+            "send_only", "one_way_push" -> OneWayPush
+            "receive_only", "one_way_pull" -> OneWayPull
             "two_way" -> TwoWay
-            else -> TwoWay
+            else -> OneWayPull
         }
     }
 }

@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -315,38 +316,42 @@ class SyncServiceImpl(
                 }
 
                 if (files.isNotEmpty()) {
-                    // Issue #27: previously this was fire-and-forget, but
-                    // [SyncCompleted] would fire immediately after with
-                    // pushed=files.size, even though the transfer was still
-                    // in flight. Now we kick off the transfer and await its
-                    // [TransferCompleted] / [TransferFailed] event on the
-                    // bus before declaring the sync round complete.
-                    val jobIdxResult = runCatching { transferService.sendFiles(peerId, files) }
-                    val jobId = jobIdxResult.getOrNull()
-                    if (jobId == null) {
-                        Napier.w("sync push failed for share ${shareId.value}: ${jobIdxResult.exceptionOrNull()?.message}")
-                    } else {
-                        // Wait up to PUSH_AWAIT_TIMEOUT for the transfer to
-                        // settle. We don't fail the sync on timeout - the
-                        // transfer may legitimately be very large; we just
-                        // log and let the next round catch up. A failure
-                        // event aborts the sync round with that reason.
-                        val terminal = withTimeoutOrNull(PUSH_AWAIT_TIMEOUT_MS) {
-                            eventBus.events()
-                                .filter { ev ->
-                                    (ev is TransferCompleted && ev.jobId == jobId) ||
-                                            (ev is TransferFailed && ev.jobId == jobId)
-                                }
-                                .first()
+                    // Subscribe to completion events BEFORE calling sendFiles to avoid
+                    // missing fast transfers on a replay=0 SharedFlowEventBus.
+                    val pendingJobId = kotlinx.coroutines.CompletableDeferred<com.kfilesync.mobile.domain.model.JobId>()
+                    val eventCollector = kotlinx.coroutines.CompletableDeferred<com.kfilesync.mobile.domain.event.DomainEvent?>()
+                    kotlinx.coroutines.coroutineScope {
+                        val sub = launch {
+                            val ev = withTimeoutOrNull(PUSH_AWAIT_TIMEOUT_MS) {
+                                eventBus.events()
+                                    .filter { ev ->
+                                        val jid = pendingJobId.await()
+                                        (ev is TransferCompleted && ev.jobId == jid) ||
+                                            (ev is TransferFailed && ev.jobId == jid)
+                                    }
+                                    .first()
+                            }
+                            eventCollector.complete(ev)
                         }
-                        if (terminal is TransferFailed) {
-                            throw DomainError.InvalidStateTransition("sync push transfer ${jobId.value} failed: ${terminal.reason}")
-                        }
-                        if (terminal == null) {
-                            Napier.w(
-                                "sync push transfer ${jobId.value} did not complete within " +
-                                        "${PUSH_AWAIT_TIMEOUT_MS / 1000}s; continuing without blocking sync"
-                            )
+                        kotlinx.coroutines.yield()
+                        val sentResult = runCatching { transferService.sendFiles(peerId, files, shareId = shareId) }
+                        val jid = sentResult.getOrNull()
+                        if (jid == null) {
+                            sub.cancel()
+                            eventCollector.complete(null)
+                            Napier.w("sync push failed for share ${shareId.value}: ${sentResult.exceptionOrNull()?.message}")
+                        } else {
+                            pendingJobId.complete(jid)
+                            val terminal = eventCollector.await()
+                            if (terminal is TransferFailed) {
+                                throw DomainError.InvalidStateTransition("sync push transfer ${jid.value} failed: ${terminal.reason}")
+                            }
+                            if (terminal == null) {
+                                Napier.w(
+                                    "sync push transfer ${jid.value} did not complete within " +
+                                            "${PUSH_AWAIT_TIMEOUT_MS / 1000}s; continuing without blocking sync"
+                                )
+                            }
                         }
                     }
                 }

@@ -73,6 +73,15 @@ class IosPinningChallengeHandler(
 
         val leafFingerprint = HashProvider.sha256(leafCertDer).toHexLower()
 
+        if (pinned.isBootstrapActive()) {
+            Napier.d("IosPinningChallengeHandler: scoped TOFU bootstrap active for pairing/probe")
+            completionHandler(
+                NSURLSessionAuthChallengeUseCredential,
+                NSURLCredential.credentialForTrust(trust)
+            )
+            return
+        }
+
         val pinnedSet = pinned.pinnedFingerprints()
         val everPaired = pinned.hasEverPaired()
         if (pinnedSet.isEmpty()) {

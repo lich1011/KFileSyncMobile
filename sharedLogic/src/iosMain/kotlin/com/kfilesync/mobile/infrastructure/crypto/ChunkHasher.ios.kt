@@ -8,5 +8,13 @@ package com.kfilesync.mobile.infrastructure.crypto
 actual object ChunkHasher {
     actual fun hash(data: ByteArray): String = HashProvider.blake3(data).toHexLower()
 
-    actual fun verify(data: ByteArray, expectedHex: String): Boolean = hash(data) == expectedHex
+    actual fun verify(data: ByteArray, expectedHex: String): Boolean {
+        val actual = hash(data)
+        if (actual.length != expectedHex.length) return false
+        var diff = 0
+        for (i in actual.indices) {
+            diff = diff or (actual[i].code xor expectedHex[i].code)
+        }
+        return diff == 0
+    }
 }

@@ -4,6 +4,7 @@ import com.kfilesync.mobile.domain.model.DeviceId
 import com.kfilesync.mobile.domain.model.DeviceState
 import com.kfilesync.mobile.domain.model.ShareId
 import com.kfilesync.mobile.domain.model.ShareStatus
+import com.kfilesync.mobile.domain.model.SyncMode
 import com.kfilesync.mobile.domain.port.DeviceRepository
 import com.kfilesync.mobile.domain.port.ShareRepository
 
@@ -45,7 +46,14 @@ actual class PolicyEnforcer actual constructor(
         if (share.status != ShareStatus.Active) return false // paused/pending/left blocks all flow
         val member = share.memberOf(peer) ?: return false
 
-        // 3. Permission direction check.
+        // 3. Share syncMode direction check (matches Core policy_enforcer::evaluate_policy).
+        when (share.syncMode) {
+            SyncMode.OneWayPush -> if (direction == Direction.Pull) return false
+            SyncMode.OneWayPull -> if (direction == Direction.Push) return false
+            SyncMode.TwoWay -> Unit
+        }
+
+        // 4. Permission direction check.
         return when (direction) {
             Direction.Push -> PermissionSpec.canPush(member.permission)
             Direction.Pull -> PermissionSpec.canPull(member.permission)

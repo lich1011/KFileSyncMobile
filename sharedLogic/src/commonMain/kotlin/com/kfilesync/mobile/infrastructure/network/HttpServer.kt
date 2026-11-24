@@ -165,7 +165,9 @@ class HttpServer(
             // before its handler runs; `finish()` short-circuits the
             // pipeline so a rejected call never reaches the route body.
             intercept(ApplicationCallPipeline.Plugins) {
-                if (call.request.httpMethod != HttpMethod.Get) {
+                val requiresTrust = call.request.httpMethod != HttpMethod.Get ||
+                    call.request.path() == WireConstants.routeSyncIndex
+                if (requiresTrust) {
                     if (!verifyAntiReplay(call)) {
                         finish()
                     }
@@ -283,8 +285,13 @@ class HttpServer(
                             return@post
                         }
                         val body = WireCodec.decodePairRevoke(call.receive<ByteArray>())
-                        val outcome = svc.revoke(DeviceId(body.deviceId))
+                        // Always revoke the authenticated caller from X-Device-Id (not body.deviceId)
+                        // and use onRemoteRevoke so we don't ping-pong /pair/revoke back.
+                        val callerId = call.request.headers[HEADER_DEVICE_ID]?.takeIf { it.isNotBlank() }
+                            ?: body.deviceId
+                        val outcome = svc.onRemoteRevoke(DeviceId(callerId))
                         if (outcome.isSuccess) {
+                            antiReplayGuard?.clearDevice(callerId)
                             call.respond(HttpStatusCode.OK, mapOf("status" to "ok"))
                         } else {
                             call.respond(
@@ -315,7 +322,9 @@ class HttpServer(
                             )
                             return@post
                         }
-                        val body = WireCodec.decodeTransferRequest(call.receive<ByteArray>())
+                        val rawBody = WireCodec.decodeTransferRequest(call.receive<ByteArray>())
+                        val verifiedCaller = call.request.headers[HEADER_DEVICE_ID]?.takeIf { it.isNotBlank() }
+                        val body = if (verifiedCaller != null) rawBody.copy(fromDeviceId = verifiedCaller) else rawBody
                         val resp = svc.onTransferRequest(body)
                         call.respondBytes(
                             WireCodec.encodeTransferAccept(resp),
@@ -380,7 +389,9 @@ class HttpServer(
                             )
                             return@post
                         }
-                        val body = WireCodec.decodeShareInvite(call.receive<ByteArray>())
+                        val rawBody = WireCodec.decodeShareInvite(call.receive<ByteArray>())
+                        val verifiedCaller = call.request.headers[HEADER_DEVICE_ID]?.takeIf { it.isNotBlank() }
+                        val body = if (verifiedCaller != null) rawBody.copy(fromDeviceId = verifiedCaller) else rawBody
                         val outcome = svc.onShareInvite(body)
                         if (outcome.isSuccess) {
                             call.respond(HttpStatusCode.OK, ShareResultDto(ok = true))
@@ -426,11 +437,9 @@ class HttpServer(
                     }
 
                     // ----- Sync (T4.5) -----
-                    // NOTE: registered under the full versioned path so it matches
-                    // the client (LanSyncHttpClient.getSyncIndex) and the desktop
-                    // lansync v1 contract (§7.3). Previously this was mistakenly
-                    // mounted at root "/sync/index", which 404'd every index fetch.
-                    get(WireConstants.routeSyncIndex) {
+                    // Strip apiPrefix inside `route(WireConstants.apiPrefix)` so the
+                    // final path is `/api/lansync/v1/sync/index` (not double-prefixed).
+                    get(WireConstants.routeSyncIndex.removePrefix(WireConstants.apiPrefix)) {
                         val indexRepo = fileIndexRepository
                         val shareRepo = shareRepository
                         if (indexRepo == null || shareRepo == null) {
@@ -458,6 +467,14 @@ class HttpServer(
                             )
                             return@get
                         }
+                        val callerId = call.request.headers[HEADER_DEVICE_ID]?.takeIf { it.isNotBlank() }
+                        if (callerId != null && share.memberOf(DeviceId(callerId)) == null && share.createdBy.value != callerId) {
+                            call.respond(
+                                HttpStatusCode.Forbidden,
+                                ErrorDto(code = "not_a_member", message = "caller is not a member of this share")
+                            )
+                            return@get
+                        }
 
                         // Index for the peer = live entries + recent tombstones (so they
                         // can pick up deletions). The 30-day window is the same cleanup
@@ -481,29 +498,30 @@ class HttpServer(
                     }
 
                     // ----- Discovery registration (§7.3) -----
-                    post(WireConstants.routeRegister) {
-                        // Registration is a discovery-time announce; the peer may not
-                        // be paired yet, so allow unpaired (the PIN ceremony is the
-                        // real trust authenticator, not /register). Neither
-                        // RegisterRequestDto nor RegisterResponseDto has a core
-                        // equivalent (core has no /register body DTO at all), so
-                        // this route keeps the implicit ContentNegotiation path -
-                        // only the path literal is sourced from WireConstants.
+                    post(WireConstants.routeRegister.removePrefix(WireConstants.apiPrefix)) {
                         val body = call.receive<RegisterRequestDto>()
-                        // Only refresh state for devices we already trust; an unpaired
-                        // peer gets an ack but cannot write rows into our DB.
                         val repo = deviceRepository
                         if (repo != null) {
                             val known = repo.findById(DeviceId(body.deviceId))
                             if (known != null && known.state == DeviceState.Paired) {
-                                runCatching { repo.updateLastSeen(known.id, kotlin.time.Clock.System.now(), null) }
+                                val parsedAddrs = body.addresses.mapNotNull { raw ->
+                                    val idx = raw.lastIndexOf(':')
+                                    if (idx > 0) {
+                                        val h = raw.substring(0, idx)
+                                        val p = raw.substring(idx + 1).toIntOrNull() ?: WireConstants.defaultPort
+                                        com.kfilesync.mobile.domain.model.DeviceAddress(h, p)
+                                    } else if (raw.isNotBlank()) {
+                                        com.kfilesync.mobile.domain.model.DeviceAddress(raw, WireConstants.defaultPort)
+                                    } else null
+                                }.takeIf { it.isNotEmpty() }
+                                runCatching { repo.updateLastSeen(known.id, kotlin.time.Clock.System.now(), parsedAddrs) }
                             }
                         }
                         call.respond(HttpStatusCode.OK, RegisterResponseDto(accepted = true))
                     }
 
                     // ----- Share leave (notify creator) -----
-                    post(WireConstants.routeShareLeave) {
+                    post(WireConstants.routeShareLeave.removePrefix(WireConstants.apiPrefix)) {
                         val svc = shareService
                         if (svc == null) {
                             call.respond(
@@ -512,7 +530,9 @@ class HttpServer(
                             )
                             return@post
                         }
-                        val body = WireCodec.decodeShareLeave(call.receive<ByteArray>())
+                        val rawBody = WireCodec.decodeShareLeave(call.receive<ByteArray>())
+                        val verifiedCaller = call.request.headers[HEADER_DEVICE_ID]?.takeIf { it.isNotBlank() }
+                        val body = if (verifiedCaller != null) rawBody.copy(deviceId = verifiedCaller) else rawBody
                         val outcome = svc.onShareLeave(body)
                         if (outcome.isSuccess) {
                             call.respond(HttpStatusCode.OK, ShareResultDto(ok = true))
@@ -525,13 +545,7 @@ class HttpServer(
                     }
 
                     // ----- Sync blocks (§7.3) -----
-                    // The block data-plane is carried over /transfer/chunks (Phase 4
-                    // decision; see design §7.3 note). This route returns a well-formed
-                    // empty answer so a strict desktop peer doesn't 404; content-defined
-                    // chunk dedup remains a post-MVP item (§1.3 non-goal). No core
-                    // equivalent exists for this route (path or DTOs), so it's
-                    // entirely untouched by this migration.
-                    post("/api/lansync/v1/sync/blocks") {
+                    post("/sync/blocks") {
                         val body = call.receive<BlocksRequestDto>()
                         Napier.i("/sync/blocks for ${body.shareId} (${body.paths.size} paths) - served via transfer pipeline")
                         call.respond(HttpStatusCode.OK, BlocksResponseDto(blocks = emptyMap()))

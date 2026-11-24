@@ -122,7 +122,8 @@ val sharedModule = module {
             eventBus = get(),
             localIdentityProvider = get(),
             httpClient = get(),
-            discoveryCoordinator = get()
+            discoveryCoordinator = get(),
+            pinnedTrustSnapshot = get()
         )
     }
     single { ManualIpProbe(httpClient = get<com.kfilesync.mobile.infrastructure.network.LanSyncHttpClient>()) }
@@ -145,7 +146,10 @@ val sharedModule = module {
             fileSource = get(),
             fileSink = get(),
             chunkingStrategy = get(),
-            discoveryCoordinator = get()
+            discoveryCoordinator = get(),
+            shareRepository = get(),
+            policyEnforcer = get(),
+            downloadDirProvider = { get<SettingsAppService>().currentDownloadDirectory() }
         )
     }
     single<ShareAppService> {
@@ -203,7 +207,9 @@ val sharedModule = module {
     single {
         NetworkAwarenessService(
             networkMonitor = get(),
-            transferRepository = get()
+            transferRepository = get(),
+            discoveryCoordinator = get(),
+            heartbeatService = get()
         )
     }
     single<SettingsAppService> {

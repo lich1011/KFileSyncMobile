@@ -42,4 +42,6 @@ expect class AntiReplayGuard() {
         windowSizeMs: Long,
         clockSkewMs: Long
     ): TrustDecision
+
+    fun clearDevice(deviceId: String)
 }

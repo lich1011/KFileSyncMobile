@@ -146,6 +146,11 @@
     <string name="settings_identity_verify_hint">Read aloud to verify with your peer over a trusted channel.</string>
     <string name="settings_section_sync_policy">Sync policy</string>
     <string name="settings_section_storage">Storage</string>
+    <string name="settings_storage_download_dir">Download directory</string>
+    <string name="settings_storage_download_dir_default_hint">Default device Downloads folder. Received files are saved here.</string>
+    <string name="settings_storage_download_dir_custom_hint">Custom folder selected for received files.</string>
+    <string name="settings_action_change_dir">Change</string>
+    <string name="settings_action_reset_default">Reset</string>
     <string name="settings_storage_cache">Cache: %1$s</string>
     <string name="settings_storage_hint">Used for in-flight transfers, decoded thumbnails and orphaned temps.</string>
     <string name="settings_action_clear_cache">Clear cache</string>

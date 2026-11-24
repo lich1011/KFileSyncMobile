@@ -85,10 +85,17 @@ class DiscoveryCoordinator(
         }
     }
 
+    /** Re-announce and re-discover after a network / Wi-Fi switch. */
+    suspend fun restart() {
+        stop()
+        start()
+    }
+
     /**
      * Inject a manually-probed peer into the discovery stream (T1.2 fallback path).
      * Used after [ManualIpProbe.probe] returns a hit so the UI sees it next to
-     * mDNS-discovered devices.
+     * mDNS-discovered devices. Also refreshes stored IP addresses for already-paired
+     * peers so switching Wi-Fi networks does not require unpairing.
      */
     suspend fun addManual(peer: DiscoveredDevice) {
         val identity = localIdentityProvider.current()
@@ -96,6 +103,12 @@ class DiscoveryCoordinator(
         mutex.withLock {
             byId[peer.deviceId.value] = peer
             _devices.value = byId.values.toList()
+        }
+        if (deviceRepository != null && peer.addresses.isNotEmpty()) {
+            val known = deviceRepository.findById(peer.deviceId)
+            if (known != null && known.state == com.kfilesync.mobile.domain.model.DeviceState.Paired) {
+                deviceRepository.updateLastSeen(peer.deviceId, kotlin.time.Clock.System.now(), peer.addresses)
+            }
         }
     }
 }

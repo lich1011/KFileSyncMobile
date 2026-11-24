@@ -42,7 +42,9 @@ import kotlinx.coroutines.launch
 class NetworkAwarenessService(
     private val networkMonitor: NetworkMonitor,
     private val transferRepository: TransferRepository,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val discoveryCoordinator: DiscoveryCoordinator? = null,
+    private val heartbeatService: HeartbeatService? = null
 ) {
     /** JobIds we paused due to a network drop. Resumed automatically on reconnect. */
     private val autoPaused = mutableSetOf<String>()
@@ -84,6 +86,13 @@ class NetworkAwarenessService(
     }
 
     private suspend fun onWifiRestored() {
+        // Re-announce our new Wi-Fi IP and re-discover peers on the new subnet
+        // so already-paired devices refresh their DHCP addresses automatically.
+        runCatching { discoveryCoordinator?.restart() }
+            .onFailure { Napier.w("NetworkAwareness: discovery restart failed: ${it.message}") }
+        runCatching { heartbeatService?.tick() }
+            .onFailure { Napier.w("NetworkAwareness: heartbeat refresh failed: ${it.message}") }
+
         if (autoPaused.isEmpty()) return
         val ids = autoPaused.toSet()
         autoPaused.clear()

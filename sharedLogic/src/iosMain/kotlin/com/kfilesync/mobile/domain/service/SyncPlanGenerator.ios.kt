@@ -65,15 +65,18 @@ actual class SyncPlanGenerator actual constructor() {
         val localVec = local.versionVector
         val remoteVec = remote.versionVector
 
+        val localAncestor = localVec.isAncestorOf(remoteVec)
+        val remoteAncestor = remoteVec.isAncestorOf(localVec)
+
         when {
-            // Case 3: identical vectors - same logical version.
-            localVec == remoteVec -> unchanged += local
+            // Case 3: logically equal vectors (handles {a: 0} == {} just like Core).
+            localAncestor && remoteAncestor -> unchanged += local
 
             // Case 4: local strict-ancestor-of remote -> remote is newer, pull.
-            localVec.isAncestorOf(remoteVec) -> toPull += remote
+            localAncestor -> toPull += remote
 
             // Case 5: remote strict-ancestor-of local -> local is newer, push.
-            remoteVec.isAncestorOf(localVec) -> toPush += local
+            remoteAncestor -> toPush += local
 
             // Case 6: concurrent edits - conflict.
             else -> conflicts += SyncConflict(

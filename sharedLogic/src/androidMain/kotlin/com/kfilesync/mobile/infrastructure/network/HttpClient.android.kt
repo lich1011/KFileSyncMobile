@@ -33,7 +33,7 @@ internal actual fun httpClientEngine(): HttpClientEngineFactory<*> = OkHttp
  */
 fun pinnedHttpClientEngine(pinned: PinnedTrustSnapshot): HttpClientEngineFactory<OkHttpConfig> {
     val trustManager = PinningTrustManager(pinned)
-    val sslContext: SSLContext = SSLContext.getInstance("TLSv1.3").apply {
+    val sslContext: SSLContext = SSLContext.getInstance("TLS").apply {
         init(null, arrayOf<javax.net.ssl.X509TrustManager>(trustManager), SecureRandom())
     }
 

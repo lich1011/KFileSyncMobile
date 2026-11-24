@@ -62,7 +62,7 @@ class Indexer(
     private val ignore: IgnoreSpec,
     private val hashPort: HashPort,
     private val clock: () -> Instant = { Clock.System.now() },
-    private val rehashChunkSize: Int = DEFAULT_REHASH_CHUNK
+    private val chunkingStrategy: ChunkingStrategy = SizeBasedChunking()
 ) {
 
     /**
@@ -124,23 +124,27 @@ class Indexer(
                 continue
             }
 
+            val fileMtime = entry.lastModifiedEpochMs?.let { Instant.fromEpochMilliseconds(it) } ?: now
             if (prior == null) {
-                val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, now)
+                val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, fileMtime, now)
                 added += hashed
             } else if (prior.deleted) {
-                // Resurrected file: rehash, then merge prior tombstone vector
-                // and bump the local counter so the result is STRICTLY newer than
-                // the tombstone. Without the bump, max(prior, fresh=1) = prior
-                // peers would classify the resurrection as "unchanged" instead
-                // of "new version".
-                val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, now)
-                val resurrectedVec = prior.versionVector.merge(hashed.versionVector).increment(me)
-                modified += hashed.copy(versionVector = resurrectedVec)
+                // Guard against resurrecting a remote tombstone if the on-disk file
+                // has NOT been modified after the tombstone timestamp.
+                val deletedMs = prior.deletedAt?.toEpochMilliseconds() ?: 0L
+                val entryMs = entry.lastModifiedEpochMs ?: 0L
+                if (deletedMs > 0L && entryMs <= deletedMs) {
+                    unchanged += prior
+                } else {
+                    val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, fileMtime, now)
+                    val resurrectedVec = prior.versionVector.merge(hashed.versionVector).increment(me)
+                    modified += hashed.copy(versionVector = resurrectedVec)
+                }
             } else if (isUnchangedQuickCheck(prior, entry)) {
                 unchanged += prior
             } else {
                 // Mtime or size changed: rehash and bump.
-                val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, now)
+                val hashed = hashFile(shareId, path, entry.locator, entry.sizeBytes, me, fileMtime, now)
                 val newVec = prior.versionVector.increment(me)
                 modified += hashed.copy(versionVector = newVec)
             }
@@ -198,6 +202,7 @@ class Indexer(
         locator: String,
         size: Long,
         me: DeviceId,
+        fileMtime: Instant,
         now: Instant
     ): FileEntry {
         // Empty file: no chunks; sha256 is the empty-input SHA-256.
@@ -211,19 +216,23 @@ class Indexer(
                 blocks = listOf(BlockInfo(index = 0, size = 0, hash = emptyChunkBlake3Hex())),
                 entryType = EntryType.File,
                 now = now
-            )
+            ).copy(modifiedAt = fileMtime)
         }
 
         val sha = hashPort.newSha256()
         val blocks = mutableListOf<BlockInfo>()
-        val buf = ByteArray(rehashChunkSize)
+        // Match Core & Desktop chunking thresholds (`compute_chunk_size`); unchunked
+        // files (<= 128 KiB, chunkSize == 0) are hashed as a single block.
+        val computedChunkSize = chunkingStrategy.computeChunkSize(size)
+        val effectiveChunkSize = if (computedChunkSize <= 0) size.coerceAtMost(DEFAULT_REHASH_CHUNK.toLong()).toInt().coerceAtLeast(1) else computedChunkSize
+        val buf = ByteArray(effectiveChunkSize)
         val chunkHasher = hashPort.newBlake3()
         var read = 0L
         var chunkIndex = 0
 
         try {
             while (read < size) {
-                val n = fileSource.readChunk(locator, chunkIndex, rehashChunkSize, buf)
+                val n = fileSource.readChunk(locator, chunkIndex, effectiveChunkSize, buf)
                 if (n <= 0) break
                 sha.update(buf, 0, n)
                 chunkHasher.reset()
@@ -245,7 +254,7 @@ class Indexer(
             blocks = blocks,
             entryType = EntryType.File,
             now = now
-        )
+        ).copy(modifiedAt = fileMtime)
     }
 
     companion object {

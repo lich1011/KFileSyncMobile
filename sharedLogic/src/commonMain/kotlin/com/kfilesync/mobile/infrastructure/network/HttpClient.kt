@@ -63,45 +63,67 @@ import com.kfilesync.mobile.application.dto.TransferRequestDto
  */
 open class LanSyncHttpClient(
     engineFactory: HttpClientEngineFactory<*> = defaultEngine(),
-    private val antiReplay: AntiReplaySigner? = null
+    private val antiReplay: AntiReplaySigner? = null,
+    private val pinnedTrust: PinnedTrustSnapshot? = null
 ) {
     private val client: HttpClient = buildClient(engineFactory)
 
+    private suspend fun <T> runWithBootstrap(block: suspend () -> T): T =
+        pinnedTrust?.withBootstrap(block) ?: block()
+
     /**
      * Attach anti-replay headers (X-Device-Id / X-Timestamp / X-Nonce /
-     * X-Fingerprint) to a mutating request when a signer is wired. GETs do
-     * not call this - the server exempts read-only routes.
+     * X-Fingerprint) to protected requests when a signer is wired.
      */
     private fun HttpRequestBuilder.antiReplayHeaders() {
         antiReplay?.headers()?.forEach { (k, v) -> header(k, v) }
     }
 
-    open suspend fun fetchInfo(baseUrl: String): DeviceInfoDto? = try {
-        WireCodec.decodeDeviceInfo(client.get("$baseUrl${WireConstants.routeInfo}").body<ByteArray>())
+    open suspend fun fetchInfo(baseUrl: String, allowBootstrap: Boolean = false): DeviceInfoDto? = try {
+        val block: suspend () -> DeviceInfoDto = {
+            WireCodec.decodeDeviceInfo(client.get("$baseUrl${WireConstants.routeInfo}").body<ByteArray>())
+        }
+        if (allowBootstrap) runWithBootstrap(block) else block()
     } catch (t: Throwable) {
         Napier.w("fetchInfo($baseUrl) failed:${t.message}")
         null
     }
 
     open suspend fun postPairRequest(baseUrl: String, body: PairRequestDto): Boolean = try {
-        val resp = client.post("$baseUrl${WireConstants.routePairRequest}") {
-            contentType(ContentType.Application.Json)
-            antiReplayHeaders()
-            setBody(WireCodec.encodePairRequest(body))
+        runWithBootstrap {
+            val resp = client.post("$baseUrl${WireConstants.routePairRequest}") {
+                contentType(ContentType.Application.Json)
+                antiReplayHeaders()
+                setBody(WireCodec.encodePairRequest(body))
+            }
+            resp.status == HttpStatusCode.Accepted || resp.status == HttpStatusCode.OK
         }
-        resp.status == HttpStatusCode.Accepted || resp.status == HttpStatusCode.OK
     } catch (t: Throwable) {
         Napier.w("postPairRequest($baseUrl) failed:${t.message}")
         false
     }
 
     open suspend fun postPairConfirm(baseUrl: String, body: PairConfirmDto): PairResultDto = try {
-        val resp = client.post("$baseUrl${WireConstants.routePairConfirm}") {
-            contentType(ContentType.Application.Json)
-            antiReplayHeaders()
-            setBody(WireCodec.encodePairConfirm(body))
+        runWithBootstrap {
+            val resp = client.post("$baseUrl${WireConstants.routePairConfirm}") {
+                contentType(ContentType.Application.Json)
+                antiReplayHeaders()
+                setBody(WireCodec.encodePairConfirm(body))
+            }
+            val raw = resp.body<ByteArray>()
+            if (raw.isEmpty()) {
+                PairResultDto(
+                    requestId = body.requestId,
+                    accepted = false,
+                    reason = "peer rejected pairing (HTTP ${resp.status.value})"
+                )
+            } else {
+                runCatching { WireCodec.decodePairResult(raw) }.getOrElse {
+                    val errMsg = parseErrorDtoMessage(raw) ?: "HTTP ${resp.status.value}"
+                    PairResultDto(requestId = body.requestId, accepted = false, reason = errMsg)
+                }
+            }
         }
-        WireCodec.decodePairResult(resp.body<ByteArray>())
     } catch (t: Throwable) {
         Napier.w("postPairConfirm($baseUrl) failed:${t.message}")
         PairResultDto(requestId = body.requestId, accepted = false, reason = t.message)
@@ -127,7 +149,16 @@ open class LanSyncHttpClient(
             antiReplayHeaders()
             setBody(WireCodec.encodeTransferRequest(body))
         }
-        WireCodec.decodeTransferAccept(resp.body<ByteArray>())
+        val raw = resp.body<ByteArray>()
+        runCatching { WireCodec.decodeTransferAccept(raw) }.getOrElse {
+            val errMsg = formatTrustRejection(resp.status, raw)
+            TransferAcceptDto(
+                sessionId = body.sessionId,
+                jobId = body.jobId,
+                accepted = false,
+                reason = errMsg
+            )
+        }
     } catch (t: Throwable) {
         Napier.w("postTransferRequest($baseUrl) failed:${t.message}")
         TransferAcceptDto(
@@ -184,7 +215,7 @@ open class LanSyncHttpClient(
             antiReplayHeaders()
             setBody(WireCodec.encodeShareInvite(body))
         }
-        resp.body<ShareResultDto>()
+        decodeShareResult(resp.status, resp.body<ByteArray>())
     } catch (t: Throwable) {
         Napier.w("postShareInvite($baseUrl) failed:${t.message}")
         ShareResultDto(ok = false, error = t.message)
@@ -197,7 +228,7 @@ open class LanSyncHttpClient(
             antiReplayHeaders()
             setBody(WireCodec.encodeShareAuthorize(body))
         }
-        resp.body<ShareResultDto>()
+        decodeShareResult(resp.status, resp.body<ByteArray>())
     } catch (t: Throwable) {
         Napier.w("postShareAuthorize($baseUrl) failed:${t.message}")
         ShareResultDto(ok = false, error = t.message)
@@ -214,6 +245,7 @@ open class LanSyncHttpClient(
     open suspend fun getSyncIndex(baseUrl: String, shareId: String): IndexResponseDto? = try {
         val bytes = client.get("$baseUrl${WireConstants.routeSyncIndex}") {
             parameter("share_id", shareId)
+            antiReplayHeaders()
         }.body<ByteArray>()
         WireCodec.decodeIndexResponse(bytes)
     } catch (t: Throwable) {
@@ -254,7 +286,7 @@ open class LanSyncHttpClient(
             antiReplayHeaders()
             setBody(WireCodec.encodeShareLeave(body))
         }
-        resp.body<ShareResultDto>()
+        decodeShareResult(resp.status, resp.body<ByteArray>())
     } catch (t: Throwable) {
         Napier.w("postShareLeave($baseUrl) failed:${t.message}")
         ShareResultDto(ok = false, error = t.message)
@@ -281,7 +313,35 @@ open class LanSyncHttpClient(
         client.close()
     }
 
+    private fun decodeShareResult(status: HttpStatusCode, raw: ByteArray): ShareResultDto {
+        if (status == HttpStatusCode.OK && raw.isNotEmpty()) {
+            runCatching {
+                return ERROR_JSON.decodeFromString<ShareResultDto>(raw.decodeToString())
+            }
+        }
+        return ShareResultDto(ok = false, error = formatTrustRejection(status, raw))
+    }
+
+    private fun parseErrorDtoMessage(raw: ByteArray): String? {
+        if (raw.isEmpty()) return null
+        return runCatching {
+            val dto = ERROR_JSON.decodeFromString<com.kfilesync.mobile.application.dto.ErrorDto>(raw.decodeToString())
+            dto.message.ifBlank { dto.code }
+        }.getOrNull()
+    }
+
+    private fun formatTrustRejection(status: HttpStatusCode, raw: ByteArray): String {
+        val msg = parseErrorDtoMessage(raw)
+        if (status == HttpStatusCode.Forbidden &&
+            (msg == null || msg.contains("not a paired peer", ignoreCase = true) || msg.contains("unknown_peer", ignoreCase = true))
+        ) {
+            return "Peer no longer recognizes this device as paired (403). Please revoke and re-pair."
+        }
+        return msg ?: "HTTP ${status.value}"
+    }
+
     companion object {
+        private val ERROR_JSON = Json { ignoreUnknownKeys = true }
         /** Bare platform engine (no pinning) - used by tests + diagnostics. */
         fun defaultEngine(): HttpClientEngineFactory<*> = httpClientEngine()
 

@@ -58,38 +58,25 @@ actual class ConflictResolver actual constructor() {
                 Resolution(primary = adopted, conflictCopy = null)
             }
             ConflictResolution.KeepBoth -> {
-                // Remote takes the canonical path; local is moved to a conflict-copy
-                // path with our deviceId stamped in.
-                val copyPath = conflictCopyName(local.path, me, now)
-                val adoptedPrimary = local.copy(
-                    size = remote.size,
-                    sha256 = remote.sha256,
-                    blocks = remote.blocks,
-                    modifiedAt = remote.modifiedAt,
-                    modifiedBy = remote.modifiedBy,
-                    deleted = remote.deleted,
-                    deletedAt = remote.deletedAt,
+                // Match Core & Android: local keeps canonical path with merged vector;
+                // remote moves to deterministic conflict copy stamped with remote's metadata.
+                val copyPath = conflictCopyName(
+                    path = remote.path,
+                    losingDeviceId = remote.modifiedBy,
+                    conflictAt = remote.modifiedAt ?: now
+                )
+                val primary = local.copy(
                     versionVector = local.versionVector.merge(remote.versionVector),
                     updatedAt = now
                 )
-                // The conflict copy carries the *local* payload but at a new
-                // path, with its own fresh version vector (the local user
-                // effectively "created" a new file by retaining their copy).
-                val copyEntry = FileEntry(
-                    shareId = local.shareId,
+                val copyEntry = remote.copy(
                     path = copyPath,
-                    entryType = local.entryType,
-                    size = local.size,
                     modifiedAt = now,
                     modifiedBy = me,
-                    versionVector = VersionVector(mapOf(me to 1L)),
-                    sha256 = local.sha256,
-                    blocks = local.blocks,
-                    deleted = false,
-                    deletedAt = null,
+                    versionVector = remote.versionVector.increment(me),
                     updatedAt = now
                 )
-                Resolution(primary = adoptedPrimary, conflictCopy = copyEntry)
+                Resolution(primary = primary, conflictCopy = copyEntry)
             }
         }
     }
@@ -98,14 +85,14 @@ actual class ConflictResolver actual constructor() {
      * Generate the conflict-copy filename for a [path] losing on a device
      * with [losingDeviceId] at the given [conflictAt] instant.
      *
-     * Conflict-copy filename format (matches the desktop client verbatim):
+     * Conflict-copy filename format (matches KFileSyncCore verbatim):
      *
      * `<basename>.sync-conflict-<YYYYMMDD>-<HHMMSS>-<deviceShortHex>.<ext>`
      */
     actual fun conflictCopyName(path: String, losingDeviceId: DeviceId, conflictAt: Instant): String {
         val (basename, ext) = splitExtension(path)
         val stamp = formatStamp(conflictAt)
-        val shortDev = losingDeviceId.value.take(8).lowercase()
+        val shortDev = losingDeviceId.value.take(8)
         val suffix = ".sync-conflict-$stamp-$shortDev"
         return if (ext.isEmpty()) "$basename$suffix" else "$basename$suffix.$ext"
     }

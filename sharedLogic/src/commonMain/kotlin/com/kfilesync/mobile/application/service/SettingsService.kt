@@ -24,15 +24,23 @@ data class SettingsSnapshot(
     val deviceIdShort: String,
     val fingerprintFormatted: String,
     val syncPolicy: SyncPolicyId,
-    val cacheSizeBytes: Long
+    val cacheSizeBytes: Long,
+    val downloadDirLocator: String? = null,
+    val downloadDirDisplay: String = DEFAULT_DOWNLOAD_DIR_DISPLAY,
+    val isDefaultDownloadDir: Boolean = true
 ) {
     companion object {
+        const val DEFAULT_DOWNLOAD_DIR_DISPLAY: String = "Downloads/KFileSync"
+
         val EMPTY = SettingsSnapshot(
             alias = "",
             deviceIdShort = "",
             fingerprintFormatted = "",
             syncPolicy = SyncPolicyId.Default,
-            cacheSizeBytes = 0L
+            cacheSizeBytes = 0L,
+            downloadDirLocator = null,
+            downloadDirDisplay = DEFAULT_DOWNLOAD_DIR_DISPLAY,
+            isDefaultDownloadDir = true
         )
     }
 }
@@ -47,6 +55,8 @@ data class SettingsSnapshot(
  * - The fingerprint comes from [LocalIdentityProvider] - read-only.
  * - Cache size is observed live so the user can see the storage maintenance
  * sweep's results.
+ * - Download directory defaults to the device's Downloads folder (`null` locator)
+ *   and may be overridden by a user-chosen SAF tree URI / folder path.
  */
 interface SettingsAppService {
     fun observeSettings(): Flow<SettingsSnapshot>
@@ -54,6 +64,9 @@ interface SettingsAppService {
     suspend fun setAlias(alias: String): Result<Unit>
     suspend fun setSyncPolicy(id: SyncPolicyId): Result<Unit>
     suspend fun clearCache(): Result<Long>
+    suspend fun setDownloadDirectory(locator: String): Result<Unit> = Result.success(Unit)
+    suspend fun resetDownloadDirectory(): Result<Unit> = Result.success(Unit)
+    fun currentDownloadDirectory(): String? = null
 }
 
 /**
@@ -84,14 +97,46 @@ class SettingsServiceImpl(
         val alias = readConfig(KEY_ALIAS) ?: identity.alias
         val policy = SyncPolicyId.fromWire(readConfig(KEY_POLICY))
         val cache = runCatching { storage.cacheSizeBytes() }.getOrDefault(0L)
+        val downloadLocator = readConfig(KEY_DOWNLOAD_DIR)?.trim()?.takeIf { it.isNotEmpty() }
 
         snapshotFlow.value = SettingsSnapshot(
             alias = alias,
             deviceIdShort = identity.deviceId.value.take(12),
             fingerprintFormatted = formatFingerprint(identity.fingerprint.hex),
             syncPolicy = policy,
-            cacheSizeBytes = cache
+            cacheSizeBytes = cache,
+            downloadDirLocator = downloadLocator,
+            downloadDirDisplay = formatDownloadDirDisplay(downloadLocator),
+            isDefaultDownloadDir = downloadLocator == null
         )
+    }
+
+    override suspend fun setDownloadDirectory(locator: String): Result<Unit> = mutex.withLock {
+        val trimmed = locator.trim()
+        if (trimmed.isBlank()) {
+            return@withLock Result.failure(IllegalArgumentException("download directory must not be blank"))
+        }
+        withContext(Dispatchers.Default) {
+            writeConfig(KEY_DOWNLOAD_DIR, trimmed)
+        }
+        refresh()
+        Napier.i("settings: download directory updated to '$trimmed'")
+        Result.success(Unit)
+    }
+
+    override suspend fun resetDownloadDirectory(): Result<Unit> = mutex.withLock {
+        withContext(Dispatchers.Default) {
+            deleteConfig(KEY_DOWNLOAD_DIR)
+        }
+        refresh()
+        Napier.i("settings: download directory reset to default")
+        Result.success(Unit)
+    }
+
+    override fun currentDownloadDirectory(): String? {
+        val cached = snapshotFlow.value.downloadDirLocator
+        if (cached != null) return cached
+        return readConfig(KEY_DOWNLOAD_DIR)?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     override suspend fun setAlias(alias: String): Result<Unit> = mutex.withLock {
@@ -102,6 +147,7 @@ class SettingsServiceImpl(
         withContext(Dispatchers.Default) {
             writeConfig(KEY_ALIAS, trimmed)
         }
+        localIdentityProvider.updateAlias(trimmed)
         refresh()
         Napier.i("settings: alias updated to '$trimmed'")
         Result.success(Unit)
@@ -142,6 +188,44 @@ class SettingsServiceImpl(
         Napier.w("config.write($key) failed: ${t.message}")
     }
 
+    private fun deleteConfig(key: String) = try {
+        database.configQueries.delete(key)
+    } catch (t: Throwable) {
+        Napier.w("config.delete($key) failed: ${t.message}")
+    }
+
+    private fun formatDownloadDirDisplay(locator: String?): String {
+        if (locator.isNullOrBlank()) return SettingsSnapshot.DEFAULT_DOWNLOAD_DIR_DISPLAY
+        // Turn Android SAF tree URIs like
+        // content://com.android.externalstorage.documents/tree/primary%3ADownload%2FMyDir
+        // into a clean readable path.
+        val decoded = percentDecode(locator)
+        val afterTree = if (decoded.contains("/tree/")) decoded.substringAfterLast("/tree/") else decoded
+        val cleaned = afterTree
+            .removePrefix("file://")
+            .removePrefix("primary:")
+            .trimStart('/')
+        return cleaned.ifBlank { locator }
+    }
+
+    private fun percentDecode(input: String): String {
+        val out = StringBuilder(input.length)
+        var i = 0
+        while (i < input.length) {
+            if (input[i] == '%' && i + 2 < input.length) {
+                val hex = input.substring(i + 1, i + 3).toIntOrNull(16)
+                if (hex != null) {
+                    out.append(hex.toChar())
+                    i += 3
+                    continue
+                }
+            }
+            out.append(input[i])
+            i += 1
+        }
+        return out.toString()
+    }
+
     /**
      * Format a SHA-256 fingerprint for the Settings UI.
      *
@@ -159,6 +243,7 @@ class SettingsServiceImpl(
     companion object {
         const val KEY_ALIAS: String = "device.alias"
         const val KEY_POLICY: String = "sync.policy"
+        const val KEY_DOWNLOAD_DIR: String = "storage.download_dir"
 
         val EMPTY = SettingsSnapshot.EMPTY
     }

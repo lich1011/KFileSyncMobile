@@ -51,12 +51,37 @@ class PinnedTrustSnapshot(
 
     private val pinned = atomic<Set<String>>(emptySet())
     private val everPaired = atomic(false)
+    private val bootstrapRefCount = atomic(0)
 
     /** Hot-path read for the TLS handshake. O(1) atomic load. */
     fun pinnedFingerprints(): Set<String> = pinned.value
 
     /** Hot-path read for the TLS handshake. O(1) atomic load. */
     fun hasEverPaired(): Boolean = everPaired.value
+
+    /** True while an explicit pairing or manual-IP probe operation is in flight. */
+    fun isBootstrapActive(): Boolean = bootstrapRefCount.value > 0
+
+    fun beginBootstrap() {
+        bootstrapRefCount.incrementAndGet()
+    }
+
+    fun endBootstrap() {
+        while (true) {
+            val cur = bootstrapRefCount.value
+            if (cur <= 0) return
+            if (bootstrapRefCount.compareAndSet(cur, cur - 1)) return
+        }
+    }
+
+    suspend fun <T> withBootstrap(block: suspend () -> T): T {
+        beginBootstrap()
+        return try {
+            block()
+        } finally {
+            endBootstrap()
+        }
+    }
 
     /** Eager refresh - call from bootstrap and after pairing/revocation events. */
     suspend fun refresh() {
